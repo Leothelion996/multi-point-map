@@ -541,7 +541,7 @@ PORT=3000
 ```bash
 npm run dev    # Uses nodemon for auto-reload
 # or
-npm start      # Standard node server                 <----------------------------------------->
+npm start      # Standard node server                 <-----------------------------------------
 ```
 
 4. **Access Application**:
