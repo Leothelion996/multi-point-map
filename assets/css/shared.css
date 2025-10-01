@@ -1,0 +1,286 @@
+/* ================================
+   SHARED STYLES FOR ALL PAGES
+   ================================ */
+
+/* Base typography and fonts */
+body {
+    font-family: 'Inter', sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+/* ================================
+   SHARED NAVIGATION STYLES
+   ================================ */
+
+/* Navigation Grid Layout */
+.nav-grid-container {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    width: 100%;
+}
+
+.nav-logo-area {
+    display: flex;
+    align-items: center;
+    justify-self: start;
+}
+
+.nav-spacer {
+    /* This column takes up the remaining space */
+}
+
+.nav-controls-area {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    justify-self: end;
+}
+
+/* Enhanced button hover effects */
+.bulk-upload-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+/* ================================
+   SHARED POPUP NOTIFICATION SYSTEM
+   ================================ */
+
+.popup-notification {
+    min-width: 300px;
+    max-width: 400px;
+    padding: 16px;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+    border-left: 4px solid;
+    background: white;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    animation: slideInRight 0.3s ease-out;
+    position: relative;
+}
+
+.popup-notification.success {
+    border-left-color: #10b981;
+    background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
+}
+
+.popup-notification.error {
+    border-left-color: #ef4444;
+    background: linear-gradient(135deg, #fef2f2 0%, #fef3f3 100%);
+}
+
+.popup-notification.warning {
+    border-left-color: #f59e0b;
+    background: linear-gradient(135deg, #fffbeb 0%, #fefce8 100%);
+}
+
+.popup-notification.info {
+    border-left-color: #3b82f6;
+    background: linear-gradient(135deg, #eff6ff 0%, #f0f9ff 100%);
+}
+
+.popup-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.popup-notification.success .popup-icon {
+    background: #10b981;
+    color: white;
+}
+
+.popup-notification.error .popup-icon {
+    background: #ef4444;
+    color: white;
+}
+
+.popup-notification.warning .popup-icon {
+    background: #f59e0b;
+    color: white;
+}
+
+.popup-notification.info .popup-icon {
+    background: #3b82f6;
+    color: white;
+}
+
+.popup-content {
+    flex-grow: 1;
+}
+
+.popup-title {
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 2px;
+}
+
+.popup-message {
+    font-size: 13px;
+    opacity: 0.8;
+    line-height: 1.4;
+}
+
+.popup-close {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 20px;
+    height: 20px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+}
+
+.popup-close:hover {
+    opacity: 1;
+}
+
+.popup-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 3px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 0 0 8px 8px;
+    overflow: hidden;
+}
+
+.popup-progress-bar {
+    height: 100%;
+    background: currentColor;
+    transition: width linear;
+}
+
+@keyframes slideInRight {
+    from {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes slideOutRight {
+    from {
+        opacity: 1;
+        transform: translateX(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateX(100%);
+    }
+}
+
+.popup-notification.removing {
+    animation: slideOutRight 0.3s ease-in;
+}
+
+/* ================================
+   SHARED MODAL STYLES
+   ================================ */
+
+.modal-overlay {
+    backdrop-filter: blur(2px);
+}
+
+.modal-content {
+    animation: slideInFromTop 0.3s ease-out;
+}
+
+@keyframes slideInFromTop {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.progress-bar-animation {
+    transition: width 0.5s ease-in-out;
+}
+
+/* Loading state styles */
+.processing-state {
+    pointer-events: none;
+    opacity: 0.7;
+}
+
+.loading-spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 8px;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.animate-spin {
+    animation: spin 1s linear infinite;
+}
+
+/* Results modal styling */
+.success-card {
+    background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+}
+
+.error-card {
+    background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+/* ================================
+   RESPONSIVE BEHAVIOR
+   ================================ */
+
+/* Responsive behavior for mobile */
+@media (max-width: 768px) {
+    .nav-grid-container {
+        grid-template-columns: auto 1fr auto;
+        gap: 0.5rem;
+    }
+
+    .nav-controls-area {
+        gap: 0.5rem;
+    }
+
+    .nav-controls-area button {
+        padding: 0.5rem;
+    }
+
+    .nav-controls-area button span {
+        display: none;
+    }
+
+    /* Mobile modal adjustments */
+    .modal-content {
+        margin: 10px;
+        max-width: calc(100vw - 20px);
+    }
+
+    .modal-content .grid-cols-2 {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+}

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>About | Custom Maps Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/shared.css">
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-sm">
+        <div class="nav-grid-container px-4 h-16">
+            <div class="nav-logo-area">
+                <i data-feather="map" class="text-blue-600 h-6 w-6"></i>
+                <span class="ml-2 text-xl font-semibold text-gray-900">CustomMaps Pro</span>
+            </div>
+            <div class="nav-spacer"></div>
+            <div class="nav-controls-area">
+                <a href="index.html" data-nav-page="map" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                    <i data-feather="map" class="mr-2"></i> Map
+                </a>
+                <a href="about.html" data-nav-page="about" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                    <i data-feather="info" class="mr-2"></i> About
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <div class="bg-white rounded-lg shadow-sm p-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-6">About Custom Maps Pro</h1>
+
+            <div class="prose max-w-none">
+                <p class="text-lg text-gray-600 mb-6">
+                    Custom Maps Pro is a powerful web application that allows you to create, manage, and share custom maps with location groups and markers.
+                </p>
+
+                <div class="grid md:grid-cols-2 gap-8 mb-8">
+                    <div>
+                        <h2 class="text-xl font-semibold text-gray-900 mb-4">Features</h2>
+                        <ul class="space-y-2 text-gray-600">
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Create and manage location groups
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Add markers with custom colors
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Bulk import locations from text
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Export data as CSV and ZIP files
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Take map screenshots with marker lists
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="check" class="h-4 w-4 text-green-500 mr-2"></i>
+                                Drag and drop marker reordering
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div>
+                        <h2 class="text-xl font-semibold text-gray-900 mb-4">Technology Stack</h2>
+                        <ul class="space-y-2 text-gray-600">
+                            <li class="flex items-center">
+                                <i data-feather="globe" class="h-4 w-4 text-blue-500 mr-2"></i>
+                                Google Maps JavaScript API
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="code" class="h-4 w-4 text-blue-500 mr-2"></i>
+                                Vanilla JavaScript
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="layout" class="h-4 w-4 text-blue-500 mr-2"></i>
+                                Tailwind CSS
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="server" class="h-4 w-4 text-blue-500 mr-2"></i>
+                                Node.js & Express
+                            </li>
+                            <li class="flex items-center">
+                                <i data-feather="shield" class="h-4 w-4 text-blue-500 mr-2"></i>
+                                Security best practices
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="bg-blue-50 rounded-lg p-6">
+                    <h2 class="text-xl font-semibold text-gray-900 mb-3">Getting Started</h2>
+                    <p class="text-gray-600 mb-4">
+                        Ready to create your custom map? Head over to the map page to start adding your locations and organizing them into groups.
+                    </p>
+                    <a href="index.html" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                        <i data-feather="arrow-right" class="mr-2"></i>
+                        Go to Map
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Popup Notifications Container -->
+    <div id="popup-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+    <script src="assets/js/shared.js"></script>
+</body>
+</html>

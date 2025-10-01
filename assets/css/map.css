@@ -1,0 +1,173 @@
+/* ================================
+   MAP PAGE SPECIFIC STYLES
+   ================================ */
+
+/* Map-specific body styling - only applied to map page */
+body.map-page {
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+}
+
+#map {
+    height: calc(100vh - 64px);
+}
+
+#map-container {
+    height: calc(100vh - 64px);
+    max-height: calc(100vh - 64px);
+}
+
+/* Ensure main content container is properly constrained */
+.flex.h-screen {
+    height: calc(100vh - 64px);
+    max-height: calc(100vh - 64px);
+}
+
+/* ================================
+   SIDEBAR STYLES
+   ================================ */
+
+.sidebar {
+    transition: all 0.3s ease;
+    height: calc(100vh - 64px) !important;
+    top: 64px;
+    max-height: calc(100vh - 64px);
+}
+
+.sidebar-closed {
+    transform: translateX(100%);
+}
+
+.sidebar-open {
+    transform: translateX(0);
+}
+
+/* ================================
+   MARKER STYLES
+   ================================ */
+
+.marker-popup {
+    min-width: 200px;
+}
+
+.marker-list-item {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+}
+
+.marker-list-item:hover {
+    background-color: #f9fafb;
+}
+
+.marker-list-item.active {
+    background-color: #eff6ff;
+}
+
+.marker-color-indicator {
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 9999px;
+    margin-right: 0.5rem;
+}
+
+.marker-list-item.selected {
+    background-color: #dbeafe;
+    border-left: 3px solid #3b82f6;
+}
+
+.marker-numbered-color-indicator {
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    color: white;
+    font-size: 0.75rem;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 0.5rem;
+    flex-shrink: 0;
+    text-shadow: 1px 1px 1px rgba(0, 0, 0, 0.5);
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* ================================
+   DRAG AND DROP STYLES
+   ================================ */
+
+.marker-list-item {
+    cursor: grab;
+}
+
+.marker-list-item:active {
+    cursor: grabbing;
+}
+
+.marker-list-item.dragging {
+    opacity: 0.5;
+    transform: rotate(2deg);
+}
+
+.marker-list-item.drag-over {
+    border-top: 2px solid #3b82f6;
+    background-color: #f3f4f6;
+}
+
+/* ================================
+   OPTIONS DROPDOWN STYLES
+   ================================ */
+
+.unified-options-section #options-dropdown-content {
+    transition: all 0.2s ease-in-out;
+}
+
+.unified-options-section #options-dropdown-content.hidden {
+    display: none;
+}
+
+.unified-options-section button i {
+    transition: transform 0.2s ease-in-out;
+}
+
+.unified-options-section button i.rotate-180 {
+    transform: rotate(180deg);
+}
+
+.options-content-section {
+    transition: all 0.2s ease-in-out;
+}
+
+.options-content-section.hidden {
+    display: none;
+}
+
+/* ================================
+   RESPONSIVE MAP LAYOUT
+   ================================ */
+
+@media (max-width: 768px) {
+    .sidebar {
+        width: 100% !important;
+        transform: translateX(100%);
+        height: calc(100vh - 64px) !important;
+        max-height: calc(100vh - 64px);
+        right: 0;
+    }
+
+    .sidebar-open {
+        transform: translateX(0) !important;
+    }
+
+    #map-container {
+        margin-right: 0 !important;
+    }
+
+    #map-container.sidebar-open-mobile {
+        margin-right: 0 !important;
+    }
+}

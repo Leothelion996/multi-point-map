@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom Maps Pro | Create & Share Custom Maps</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="assets/css/shared.css">
+    <link rel="stylesheet" href="assets/css/map.css">
+</head>
+<body class="bg-gray-50 map-page">
+    <!-- Navigation -->
+    <nav class="bg-white shadow-sm">
+        <div class="nav-grid-container px-4 h-16">
+            <div class="nav-logo-area">
+                <i data-feather="map" class="text-blue-600 h-6 w-6"></i>
+                <span class="ml-2 text-xl font-semibold text-gray-900">CustomMaps Pro</span>
+            </div>
+            <div class="nav-spacer"></div>
+            <div class="nav-controls-area">
+                <a href="about.html" data-nav-page="about" class="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                    <i data-feather="info" class="mr-2"></i> About
+                </a>
+                <button id="screenshot-btn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                    <i data-feather="camera" class="mr-2"></i> Screenshot
+                </button>
+                <button id="export-btn" class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                    <i data-feather="download" class="mr-2"></i> Export
+                </button>
+                <button id="sidebar-toggle" class="p-2 rounded-md text-gray-500 hover:text-gray-600 hover:bg-gray-100 focus:outline-none">
+                    <i data-feather="menu"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <div class="flex h-screen">
+        <!-- Map Container (now on left) -->
+        <div id="map-container" class="flex-1 mr-64 transition-all duration-300 relative">
+            <div id="map" class="w-full h-full"></div>
+        </div>
+
+        <!-- Sidebar (now on right) -->
+        <div id="sidebar" class="sidebar sidebar-open bg-white w-64 border-l border-gray-200 fixed right-0 z-10 flex flex-col">
+            <div class="flex-shrink-0 p-4 border-b border-gray-200">
+                <h2 class="text-lg font-medium text-gray-900">Customize Your Map</h2>
+            </div>
+
+            <!-- Single scrollable content area -->
+            <div class="flex-1 overflow-y-auto">
+                <div class="p-4 pb-8 space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Location Group</label>
+                        <div class="flex space-x-2">
+                            <!-- Custom Group Dropdown -->
+                            <div class="flex-1 relative">
+                                <button id="custom-group-select" class="w-full pl-3 pr-10 py-2 text-base border border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md bg-white text-left">
+                                    <span id="selected-group-text">Select a group</span>
+                                    <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                                        <i data-feather="chevron-down" class="h-4 w-4 text-gray-400"></i>
+                                    </div>
+                                </button>
+
+                                <!-- Dropdown Menu -->
+                                <div id="group-dropdown-menu" class="hidden absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-48 overflow-y-auto">
+                                    <!-- Group options will be populated here -->
+                                </div>
+                            </div>
+                            <button id="new-group-btn" class="px-3 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none" title="Create new group">
+                                <i data-feather="plus" class="h-4 w-4"></i>
+                            </button>
+                        </div>
+                        <input id="new-group-input" type="text" class="mt-2 hidden block w-full pl-3 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Enter group name and press Enter">
+                        <p class="text-xs text-gray-500 mt-1">Create a group first, then search for locations to add.</p>
+                    </div>
+
+                    <!-- Unified Options Dropdown -->
+                    <div class="unified-options-section">
+                        <button id="options-dropdown-btn" class="w-full flex items-center justify-between text-left py-2 px-3 bg-gray-50 hover:bg-gray-100 rounded-md focus:outline-none">
+                            <span class="text-sm font-medium text-gray-700">Map Options</span>
+                            <i data-feather="chevron-down" class="h-4 w-4 text-gray-500 transition-transform duration-200"></i>
+                        </button>
+
+                        <div id="options-dropdown-content" class="mt-2 space-y-4 hidden">
+                            <!-- Search Location -->
+                            <div class="bg-white border border-gray-200 rounded-md p-3">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Search Location</label>
+                                <div class="relative">
+                                    <input id="location-search" type="text" class="block w-full pl-3 pr-10 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Start typing an address...">
+                                    <div class="absolute inset-y-0 right-0 pr-3 flex items-center pointer-events-none">
+                                        <i data-feather="search" class="h-5 w-5 text-gray-400"></i>
+                                    </div>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-1">Autocomplete will suggest addresses as you type.</p>
+                            </div>
+
+                            <!-- Marker Colors -->
+                            <div class="bg-white border border-gray-200 rounded-md p-3">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Marker Color</label>
+                                <!-- Row 1 -->
+                                <div class="flex space-x-2 mb-2">
+                                    <button class="w-6 h-6 rounded-full bg-red-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-blue-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ring-2 ring-offset-2"></button>
+                                    <button class="w-6 h-6 rounded-full bg-green-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-yellow-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-yellow-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-purple-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"></button>
+                                </div>
+                                <!-- Row 2 -->
+                                <div class="flex space-x-2">
+                                    <button class="w-6 h-6 rounded-full bg-pink-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-pink-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-indigo-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-orange-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-teal-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-teal-500"></button>
+                                    <button class="w-6 h-6 rounded-full bg-gray-500 border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500"></button>
+                                </div>
+                                <p class="text-xs text-gray-500 mt-2">Select a marker first, then choose a color to update it.</p>
+                            </div>
+                        </div>
+                    </div>
+
+
+                    <div class="space-y-2">
+                        <button id="add-marker-btn-sidebar" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                            <i data-feather="plus" class="mr-2"></i> Add Marker
+                        </button>
+                        <button id="bulk-upload-btn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                            <i data-feather="upload" class="mr-2"></i> Bulk Add
+                        </button>
+                        <button id="save-temp-btn" class="w-full inline-flex justify-center items-center px-4 py-2 border border-orange-500 text-sm font-medium rounded-md shadow-sm text-orange-600 bg-orange-50 hover:bg-orange-100 focus:outline-none hidden">
+                            <i data-feather="save" class="mr-2"></i> Save <span id="temp-count-badge" class="ml-1 bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">0</span> Addresses
+                        </button>
+                    </div>
+
+                    <!-- Markers Section -->
+                    <div class="border-t border-gray-200 pt-4 mt-6">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="text-sm font-medium text-gray-900">Your Markers</h3>
+                            <div class="flex items-center space-x-2">
+                                <button id="see-all-markers-btn" class="text-xs px-2 py-1 border border-gray-300 rounded text-gray-600 hover:text-gray-800 hover:bg-gray-50 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed" title="Zoom to show all markers" disabled>
+                                    See All
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Fine Zoom Controls -->
+                        <div class="mb-3 p-2 bg-gray-50 rounded border">
+                            <div class="flex items-center justify-between">
+                                <span class="text-xs font-medium text-gray-700">Fine Zoom</span>
+                                <div class="flex items-center space-x-1">
+                                    <button id="fine-zoom-out-btn" class="w-6 h-6 flex items-center justify-center text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-800 hover:bg-white focus:outline-none" title="Zoom out 0.25 levels">
+                                        −
+                                    </button>
+                                    <span id="zoom-level-display" class="text-xs text-gray-500 min-w-8 text-center">12</span>
+                                    <button id="fine-zoom-in-btn" class="w-6 h-6 flex items-center justify-center text-xs border border-gray-300 rounded text-gray-600 hover:text-gray-800 hover:bg-white focus:outline-none" title="Zoom in 0.25 levels">
+                                        +
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="space-y-2" id="markers-container">
+                            <!-- Marker list items will be populated dynamically -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+
+    <!-- Bulk Upload Modal -->
+    <div id="bulk-upload-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 hidden">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Bulk Add Addresses</h3>
+                    <button id="close-bulk-modal" class="text-gray-400 hover:text-gray-600">
+                        <i data-feather="x" class="h-6 w-6"></i>
+                    </button>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Group Name (optional)</label>
+                    <input id="bulk-group-name" type="text" class="block w-full pl-3 pr-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Enter group name or leave blank to use selected group">
+                    <p class="text-xs text-gray-500 mt-1">If provided, a new group will be created. Otherwise, the currently selected group will be used.</p>
+                </div>
+
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Enter addresses (one per line):</label>
+                    <textarea id="bulk-addresses-input"
+                              class="w-full h-40 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                              placeholder="123 Main St, New York, NY&#10;456 Oak Ave, Los Angeles, CA&#10;789 Pine Rd, Chicago, IL"></textarea>
+                    <p class="text-xs text-gray-500 mt-1">You can enter addresses separated by new lines or commas. Maximum 50 addresses per batch.</p>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <div class="text-sm text-gray-600">
+                        <span id="address-count">0</span> addresses detected
+                    </div>
+                    <div class="flex space-x-3">
+                        <button id="cancel-bulk-upload" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                            Cancel
+                        </button>
+                        <button id="start-bulk-upload" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none">
+                            Start Upload
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Upload Progress Modal -->
+    <div id="bulk-progress-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 hidden">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-lg shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <div class="text-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Processing Addresses</h3>
+                    <p class="text-sm text-gray-600 mt-1" id="progress-status">Preparing to process addresses...</p>
+                </div>
+
+                <div class="mb-4">
+                    <div class="flex justify-between text-sm text-gray-600 mb-1">
+                        <span id="progress-count">0 of 0</span>
+                        <span id="progress-percentage">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 rounded-full h-2.5">
+                        <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div class="text-center">
+                    <div class="text-sm text-gray-600 mb-3" id="current-address">Ready to start...</div>
+                    <button id="cancel-processing" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Upload Results Modal -->
+    <div id="bulk-results-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 hidden">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Upload Results</h3>
+                    <button id="close-results-modal" class="text-gray-400 hover:text-gray-600">
+                        <i data-feather="x" class="h-6 w-6"></i>
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+                        <div class="flex items-center">
+                            <i data-feather="check-circle" class="h-5 w-5 text-green-600 mr-2"></i>
+                            <div>
+                                <div class="text-sm font-medium text-green-800">Successfully Added</div>
+                                <div class="text-lg font-bold text-green-600" id="success-count">0</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bg-red-50 border border-red-200 rounded-lg p-3">
+                        <div class="flex items-center">
+                            <i data-feather="x-circle" class="h-5 w-5 text-red-600 mr-2"></i>
+                            <div>
+                                <div class="text-sm font-medium text-red-800">Failed</div>
+                                <div class="text-lg font-bold text-red-600" id="failed-count">0</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="failed-addresses-section" class="hidden mb-4">
+                    <h4 class="text-sm font-medium text-gray-900 mb-2">Failed Addresses:</h4>
+                    <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 max-h-40 overflow-y-auto">
+                        <div id="failed-addresses-list" class="text-sm text-gray-700"></div>
+                    </div>
+                    <button id="copy-failed-addresses" class="mt-2 text-sm text-blue-600 hover:text-blue-800">
+                        Copy failed addresses to clipboard
+                    </button>
+                </div>
+
+                <div class="flex justify-end">
+                    <button id="close-results" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Save Temporary Addresses Modal -->
+    <div id="save-temp-modal" class="fixed inset-0 z-50 overflow-y-auto hidden">
+        <div class="modal-overlay fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4">
+            <div class="modal-content bg-white rounded-lg shadow-xl max-w-md w-full mx-auto">
+                <div class="p-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-medium text-gray-900">Save Temporary Addresses</h3>
+                        <button id="close-save-temp-modal" class="text-gray-400 hover:text-gray-600">
+                            <i data-feather="x" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+
+                    <p class="text-sm text-gray-600 mb-4">
+                        You have <span id="temp-address-count">0</span> unsaved addresses. Choose how to save them:
+                    </p>
+
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Group Name</label>
+                            <input type="text" id="save-temp-group-name"
+                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                   placeholder="Enter group name...">
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Or select existing group</label>
+                            <select id="save-temp-group-select"
+                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Choose existing group...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end space-x-3 mt-6">
+                        <button id="discard-temp-addresses"
+                                class="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
+                            Discard
+                        </button>
+                        <button id="save-temp-addresses"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+                                disabled>
+                            Save Addresses
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Export Modal -->
+    <div id="export-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 hidden">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-md shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">Export Location Groups</h3>
+                    <button id="close-export-modal" class="text-gray-400 hover:text-gray-600">
+                        <i data-feather="x" class="h-6 w-6"></i>
+                    </button>
+                </div>
+
+                <div class="mb-4">
+                    <p class="text-sm text-gray-600 mb-3">Select the groups you want to export as CSV files:</p>
+
+                    <!-- Groups Checklist -->
+                    <div id="export-groups-list" class="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3 bg-gray-50">
+                        <!-- Group checkboxes will be populated here -->
+                    </div>
+
+                    <div class="mt-3 text-xs text-gray-500">
+                        Each group will be exported as a separate CSV file in a ZIP archive.
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <input type="checkbox" id="select-all-groups" class="mr-2">
+                        <label for="select-all-groups" class="text-sm text-gray-700">Select All</label>
+                    </div>
+                    <div class="flex space-x-3">
+                        <button id="cancel-export" class="px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none">
+                            Cancel
+                        </button>
+                        <button id="start-export" class="px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-green-600 hover:bg-green-700 focus:outline-none disabled:opacity-50" disabled>
+                            <i data-feather="download" class="mr-2 h-4 w-4"></i>
+                            Export ZIP
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Popup Notifications Container -->
+    <div id="popup-container" class="fixed top-4 right-4 z-50 space-y-2"></div>
+
+    <!-- JSZip library for creating ZIP files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- html2canvas library for screenshot capture -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="assets/js/shared.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
