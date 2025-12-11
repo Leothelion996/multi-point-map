@@ -6,6 +6,15 @@ if (typeof isMapPage === 'function' && isMapPage()) {
     // Initialize Feather Icons
     feather.replace();
 
+// Configuration - Read from HTML body data attributes
+const APP_CONFIG = {
+    groupType: document.body.dataset.groupType || 'locations',
+    pageTitle: document.body.dataset.pageTitle || 'Location Groups'
+};
+
+// Construct API endpoint based on group type
+const API_BASE = `/api/${APP_CONFIG.groupType}/groups`;
+
 // DOM Utility Service
 class DOMCache {
     constructor() {
@@ -210,6 +219,7 @@ const apiService = new APIService();
 // Global variables
 let map;
 let markers = [];
+let polygons = {}; // Store polygons by location ID {locationId: polygonInstance}
 let infoWindow;
 let bounds;
 let currentGroupId = null;
@@ -319,7 +329,7 @@ function loadGoogleMaps() {
 // API functions
 async function fetchLocationGroups() {
     try {
-        const response = await fetch('/api/location-groups');
+        const response = await fetch(API_BASE);
 
         if (!response.ok) {
             console.error('Failed to fetch location groups:', response.status, response.statusText);
@@ -340,7 +350,7 @@ async function fetchLocationGroups() {
 
 async function createLocationGroup(name) {
     try {
-        const response = await fetch('/api/location-groups', {
+        const response = await fetch(API_BASE, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -366,7 +376,7 @@ async function createLocationGroup(name) {
 
 async function deleteLocationGroup(groupId) {
     try {
-        const response = await fetch(`/api/location-groups/${groupId}`, {
+        const response = await fetch(`${API_BASE}/${groupId}`, {
             method: 'DELETE'
         });
 
@@ -424,7 +434,7 @@ function deleteSelectedGroup() {
 
 async function addLocationToGroup(groupId, location) {
     try {
-        const response = await fetch(`/api/location-groups/${groupId}/locations`, {
+        const response = await fetch(`${API_BASE}/${groupId}/locations`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -448,7 +458,7 @@ async function addLocationToGroup(groupId, location) {
 
 async function deleteLocationFromGroup(groupId, locationId) {
     try {
-        await fetch(`/api/location-groups/${groupId}/locations/${locationId}`, {
+        await fetch(`${API_BASE}/${groupId}/locations/${locationId}`, {
             method: 'DELETE'
         });
     } catch (error) {
@@ -533,7 +543,7 @@ function selectGroup(groupId) {
 
     // Update see all button state
     const seeAllBtn = document.getElementById('see-all-markers-btn');
-    seeAllBtn.disabled = !currentGroupId || markers.length === 0;
+    seeAllBtn.disabled = !currentGroupId || (markers.length === 0 && Object.keys(polygons).length === 0);
 }
 
 // Initialize Map
@@ -567,18 +577,38 @@ function initMap() {
 
     // Initialize autocomplete for search input
     const searchInput = document.getElementById('location-search');
-    autocomplete = new google.maps.places.Autocomplete(searchInput, {
-        types: ['geocode'],
-        componentRestrictions: { country: 'us' } // Remove this line to allow worldwide search
-    });
 
-    // Listen for place selection
-    autocomplete.addListener('place_changed', function() {
-        const place = autocomplete.getPlace();
-        if (place.geometry) {
-            addLocationFromPlace(place);
-        }
-    });
+    // For zipcodes page, use different behavior
+    if (APP_CONFIG.groupType === 'zipcodes') {
+        // Add keypress listener for zip code entry
+        searchInput.addEventListener('keypress', async function(e) {
+            if (e.key === 'Enter') {
+                const input = this.value.trim();
+
+                // Check if input is a 5-digit zip code
+                if (/^\d{5}$/.test(input)) {
+                    await addZipCodeFromInput(input);
+                    this.value = '';
+                } else {
+                    showPopup('warning', 'Please enter a valid 5-digit ZIP code', 'Invalid Input');
+                }
+            }
+        });
+    } else {
+        // For locations page, use standard Places Autocomplete
+        autocomplete = new google.maps.places.Autocomplete(searchInput, {
+            types: ['geocode'],
+            componentRestrictions: { country: 'us' }
+        });
+
+        // Listen for place selection
+        autocomplete.addListener('place_changed', function() {
+            const place = autocomplete.getPlace();
+            if (place.geometry) {
+                addLocationFromPlace(place);
+            }
+        });
+    }
 
     // Load existing groups
     fetchLocationGroups();
@@ -890,6 +920,203 @@ function createMarker(position, title, color, locationId) {
     return marker;
 }
 
+// ================================
+// POLYGON MANAGEMENT (for zip codes)
+// ================================
+
+/**
+ * Create a polygon from GeoJSON geometry
+ * @param {string} locationId - Unique ID for this location
+ * @param {string} geometryJson - GeoJSON string with polygon coordinates
+ * @param {string} color - Hex color for the polygon
+ * @param {string} title - Title for the polygon (e.g., "ZIP 90210")
+ * @returns {google.maps.Polygon} The created polygon instance
+ */
+function createPolygonFromGeometry(locationId, geometryJson, color, title) {
+    try {
+        const geometry = JSON.parse(geometryJson);
+
+        if (geometry.type !== 'Polygon' || !geometry.coordinates || !geometry.coordinates[0]) {
+            console.error('Invalid polygon geometry:', geometry);
+            return null;
+        }
+
+        // Convert GeoJSON coordinates [lng, lat] to Google Maps LatLng {lat, lng}
+        const paths = geometry.coordinates[0].map(coord => ({
+            lat: coord[1],
+            lng: coord[0]
+        }));
+
+        // Create the polygon
+        const polygon = new google.maps.Polygon({
+            paths: paths,
+            strokeColor: color,
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.35,
+            map: map,
+            locationId: locationId,
+            title: title
+        });
+
+        // Store polygon reference
+        polygons[locationId] = polygon;
+
+        // Extend bounds to include all polygon vertices
+        paths.forEach(coord => {
+            bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
+        });
+
+        // Add click listener to show info window
+        polygon.addListener('click', (event) => {
+            const content = document.createElement('div');
+            content.className = 'marker-popup';
+
+            // Title
+            const titleElement = document.createElement('h3');
+            titleElement.className = 'font-medium text-gray-900';
+            titleElement.textContent = title;
+
+            // Color picker section
+            const colorSection = document.createElement('div');
+            colorSection.className = 'mt-2 mb-2';
+
+            const colorLabel = document.createElement('div');
+            colorLabel.className = 'text-xs font-medium text-gray-700 mb-1';
+            colorLabel.textContent = 'Change Color:';
+
+            const colorPicker = document.createElement('div');
+            colorPicker.className = 'flex space-x-1';
+
+            // Define available colors
+            const colors = [
+                { name: 'Red', value: '#ef4444', class: 'bg-red-500' },
+                { name: 'Blue', value: '#3b82f6', class: 'bg-blue-500' },
+                { name: 'Green', value: '#10b981', class: 'bg-green-500' },
+                { name: 'Yellow', value: '#f59e0b', class: 'bg-yellow-500' },
+                { name: 'Purple', value: '#8b5cf6', class: 'bg-purple-500' },
+                { name: 'Pink', value: '#ec4899', class: 'bg-pink-500' },
+                { name: 'Orange', value: '#f97316', class: 'bg-orange-500' },
+                { name: 'Gray', value: '#6b7280', class: 'bg-gray-500' }
+            ];
+
+            colors.forEach(colorOption => {
+                const colorButton = document.createElement('button');
+                colorButton.className = `w-5 h-5 rounded-full ${colorOption.class} border-2 border-gray-300 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-500`;
+                colorButton.title = `Change to ${colorOption.name}`;
+
+                // Highlight current color
+                if (color === colorOption.value) {
+                    colorButton.classList.add('ring-2', 'ring-offset-1', 'ring-gray-500');
+                }
+
+                colorButton.addEventListener('click', async () => {
+                    try {
+                        // Update polygon color via API
+                        await apiService.updateLocation(currentGroupId, locationId, {
+                            color: colorOption.value
+                        });
+
+                        // Update polygon locally
+                        updatePolygonColor(locationId, colorOption.value);
+
+                        // Close popup
+                        infoWindow.close();
+
+                        // Show success notification
+                        showPopup('success', `Color changed to ${colorOption.name}`, 'Color Updated');
+
+                    } catch (error) {
+                        console.error('Error updating polygon color:', error);
+                        showPopup('error', 'Failed to update color. Please try again.', 'Update Failed');
+                    }
+                });
+
+                colorPicker.appendChild(colorButton);
+            });
+
+            colorSection.appendChild(colorLabel);
+            colorSection.appendChild(colorPicker);
+
+            // Delete button
+            const buttonContainer = document.createElement('div');
+            buttonContainer.className = 'mt-2 flex space-x-2';
+
+            const deleteButton = document.createElement('button');
+            deleteButton.className = 'text-xs px-2 py-1 bg-red-100 text-red-800 rounded hover:bg-red-200';
+            deleteButton.textContent = 'Delete';
+            deleteButton.addEventListener('click', () => deleteMarker(locationId));
+
+            buttonContainer.appendChild(deleteButton);
+
+            // Assemble content
+            content.appendChild(titleElement);
+            content.appendChild(colorSection);
+            content.appendChild(buttonContainer);
+
+            // Show info window at click location
+            infoWindow.setContent(content);
+            infoWindow.setPosition(event.latLng);
+            infoWindow.open(map);
+        });
+
+        // Add mouseover/mouseout for hover effect
+        polygon.addListener('mouseover', () => {
+            polygon.setOptions({
+                fillOpacity: 0.5,
+                strokeWeight: 3
+            });
+        });
+
+        polygon.addListener('mouseout', () => {
+            polygon.setOptions({
+                fillOpacity: 0.35,
+                strokeWeight: 2
+            });
+        });
+
+        return polygon;
+
+    } catch (error) {
+        console.error('Error creating polygon from geometry:', error);
+        return null;
+    }
+}
+
+/**
+ * Remove a polygon from the map
+ * @param {string} locationId - ID of the location/polygon to remove
+ */
+function removePolygon(locationId) {
+    if (polygons[locationId]) {
+        polygons[locationId].setMap(null);
+        delete polygons[locationId];
+    }
+}
+
+/**
+ * Update polygon color
+ * @param {string} locationId - ID of the location/polygon
+ * @param {string} newColor - New hex color
+ */
+function updatePolygonColor(locationId, newColor) {
+    if (polygons[locationId]) {
+        polygons[locationId].setOptions({
+            strokeColor: newColor,
+            fillColor: newColor
+        });
+    }
+}
+
+/**
+ * Clear all polygons from the map
+ */
+function clearPolygons() {
+    Object.values(polygons).forEach(polygon => polygon.setMap(null));
+    polygons = {};
+}
+
 function clearMarkers() {
     markers.forEach(marker => marker.setMap(null));
     markers = [];
@@ -897,33 +1124,58 @@ function clearMarkers() {
 
 async function loadGroupMarkers() {
     clearMarkers();
+    clearPolygons();
     updateMarkerList();
 
     if (!currentGroupId) return;
 
     try {
-        const response = await fetch(`/api/location-groups/${currentGroupId}`);
+        const response = await fetch(`${API_BASE}/${currentGroupId}`);
         const group = await response.json();
 
         group.locations.forEach(location => {
-            createMarker(
-                { lat: location.lat, lng: location.lng },
-                location.title,
-                location.color,
-                location.id
-            );
+            // Conditional rendering: polygons for zipcodes with geometry, markers otherwise
+            if (location.geometry && APP_CONFIG.groupType === 'zipcodes') {
+                // Render as polygon
+                createPolygonFromGeometry(
+                    location.id,
+                    location.geometry,
+                    location.color,
+                    location.title
+                );
+            } else {
+                // Render as marker (default for locations, or fallback for zipcodes without geometry)
+                createMarker(
+                    { lat: location.lat, lng: location.lng },
+                    location.title,
+                    location.color,
+                    location.id
+                );
+            }
         });
 
         updateMarkerList();
 
-        if (markers.length > 0) {
-            const bounds = new google.maps.LatLngBounds();
-            markers.forEach(marker => {
-                bounds.extend(marker.getPosition());
-            });
-            map.fitBounds(bounds);
+        // Fit map bounds to include all markers and polygons
+        if (markers.length > 0 || Object.keys(polygons).length > 0) {
+            const mapBounds = new google.maps.LatLngBounds();
 
-            if (markers.length === 1) {
+            // Include marker positions
+            markers.forEach(marker => {
+                mapBounds.extend(marker.getPosition());
+            });
+
+            // Include polygon vertices
+            Object.values(polygons).forEach(polygon => {
+                const paths = polygon.getPath();
+                paths.forEach((path, index) => {
+                    mapBounds.extend(path);
+                });
+            });
+
+            map.fitBounds(mapBounds);
+
+            if (markers.length === 1 && Object.keys(polygons).length === 0) {
                 map.setZoom(15);
             }
         }
@@ -936,6 +1188,7 @@ function updateMarkerList() {
     const container = document.getElementById('markers-container');
     container.innerHTML = '';
 
+    // Display regular markers
     markers.forEach((marker, index) => {
         const markerNumber = index + 1;
         const item = document.createElement('div');
@@ -993,9 +1246,59 @@ function updateMarkerList() {
         container.appendChild(item);
     });
 
+    // Display polygons (for ZIP codes)
+    let polygonIndex = 0;
+    Object.entries(polygons).forEach(([locationId, polygon]) => {
+        polygonIndex++;
+        const item = document.createElement('div');
+        item.className = 'marker-list-item';
+        item.dataset.locationId = locationId;
+
+        // Create numbered color indicator
+        const colorIndicator = document.createElement('div');
+        colorIndicator.className = 'marker-numbered-color-indicator';
+        colorIndicator.style.backgroundColor = polygon.strokeColor || polygon.fillColor;
+        colorIndicator.textContent = polygonIndex;
+
+        // Create title span safely
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'text-sm text-gray-700 flex-1';
+        titleSpan.textContent = polygon.title || `ZIP Code ${polygonIndex}`;
+
+        // Create delete button safely
+        const deleteButton = document.createElement('button');
+        deleteButton.className = 'text-gray-400 hover:text-gray-600';
+        deleteButton.addEventListener('click', () => deleteMarker(locationId));
+
+        const deleteIcon = document.createElement('i');
+        deleteIcon.setAttribute('data-feather', 'x');
+        deleteIcon.className = 'h-4 w-4';
+        deleteButton.appendChild(deleteIcon);
+
+        // Assemble item safely
+        item.appendChild(colorIndicator);
+        item.appendChild(titleSpan);
+        item.appendChild(deleteButton);
+
+        item.addEventListener('click', function(e) {
+            if (!e.target.closest('button')) {
+                // Get bounds of polygon and fit map to it
+                const bounds = new google.maps.LatLngBounds();
+                polygon.getPath().forEach(coord => bounds.extend(coord));
+                map.fitBounds(bounds);
+
+                document.querySelectorAll('.marker-list-item').forEach(i =>
+                    i.classList.remove('active'));
+                this.classList.add('active');
+            }
+        });
+
+        container.appendChild(item);
+    });
+
     // Update see all button state
     const seeAllBtn = document.getElementById('see-all-markers-btn');
-    seeAllBtn.disabled = !currentGroupId || markers.length === 0;
+    seeAllBtn.disabled = !currentGroupId || (markers.length === 0 && Object.keys(polygons).length === 0);
 
     // Update temp button display
     updateTempButtonDisplay();
@@ -1009,11 +1312,15 @@ async function deleteMarker(locationId) {
     try {
         await deleteLocationFromGroup(currentGroupId, locationId);
 
+        // Remove marker if it exists
         const markerIndex = markers.findIndex(m => m.locationId === locationId);
         if (markerIndex !== -1) {
             markers[markerIndex].setMap(null);
             markers.splice(markerIndex, 1);
         }
+
+        // Remove polygon if it exists
+        removePolygon(locationId);
 
         updateMarkerList();
         infoWindow.close();
@@ -1107,6 +1414,95 @@ async function addLocationFromPlace(place) {
         addButton.innerHTML = originalButtonText;
         addButton.disabled = false;
         feather.replace(); // Re-render icons
+    }
+}
+
+// Add zip code from input (for zipcodes page)
+async function addZipCodeFromInput(zipCode) {
+    try {
+        if (!currentGroupId) {
+            // Check if we can create a temp group instead
+            if (!tempGroupId) {
+                tempGroupId = await createTempGroup();
+            }
+            if (!tempGroupId) {
+                showPopup('warning', 'Unable to create temporary group. Please select a group first.', 'Group Required');
+                return;
+            }
+            currentGroupId = tempGroupId;
+        }
+
+        // Call the zip code lookup API
+        const response = await fetch('/api/zipcodes/lookup', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ zipCode })
+        });
+
+        if (!response.ok) {
+            if (response.status === 404) {
+                showPopup('error', `ZIP code ${zipCode} not found. Please verify the ZIP code.`, 'ZIP Not Found');
+            } else {
+                showPopup('error', 'Failed to lookup ZIP code. Please try again.', 'Lookup Failed');
+            }
+            return;
+        }
+
+        const zipData = await response.json();
+
+        // Create location data with geometry
+        const locationData = {
+            lat: zipData.center.lat,
+            lng: zipData.center.lng,
+            title: zipData.title,
+            color: getSelectedMarkerColor()
+        };
+
+        // Include geometry if available
+        if (zipData.geometry) {
+            locationData.geometry = zipData.geometry;
+        }
+
+        console.log('Adding zip code:', locationData, 'to group:', currentGroupId);
+
+        // Add to database
+        const newLocation = await addLocationToGroup(currentGroupId, locationData);
+        if (newLocation) {
+            // Render on map
+            if (newLocation.geometry) {
+                createPolygonFromGeometry(
+                    newLocation.id,
+                    newLocation.geometry,
+                    newLocation.color,
+                    newLocation.title
+                );
+            } else {
+                // Fallback to marker if no geometry
+                createMarker(
+                    { lat: newLocation.lat, lng: newLocation.lng },
+                    newLocation.title,
+                    newLocation.color,
+                    newLocation.id
+                );
+            }
+
+            updateMarkerList();
+            map.setCenter({ lat: newLocation.lat, lng: newLocation.lng });
+            map.setZoom(12);
+
+            // Refresh location groups to update counts
+            await fetchLocationGroups();
+
+            // Show success feedback
+            showPopup('success', `Added ${zipData.title} to map`, 'ZIP Code Added');
+        } else {
+            showPopup('error', 'Failed to add ZIP code. Please try again.', 'Add Failed');
+        }
+    } catch (error) {
+        console.error('Error adding ZIP code:', error);
+        showPopup('error', 'Failed to add ZIP code. Please try again.', 'Add Failed');
     }
 }
 
@@ -1306,7 +1702,7 @@ async function updateSelectedMarkerColor(newColor) {
 
     try {
         // Update marker color on server
-        const response = await fetch(`/api/location-groups/${currentGroupId}/locations/${selectedMarker.locationId}`, {
+        const response = await fetch(`${API_BASE}/${currentGroupId}/locations/${selectedMarker.locationId}`, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/json'
@@ -1397,7 +1793,7 @@ async function reorderMarkers(fromIndex, toIndex) {
     if (currentGroupId) {
         try {
             const locationIds = markers.map(marker => marker.locationId);
-            await fetch(`/api/location-groups/${currentGroupId}/locations/reorder`, {
+            await fetch(`${API_BASE}/${currentGroupId}/locations/reorder`, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/json'
@@ -1621,32 +2017,103 @@ async function processBulkAddresses(addresses) {
         updateProgress(i, addresses.length, address, `Processing address ${i + 1} of ${addresses.length}...`);
 
         try {
-            // Use Google Geocoder to find the address
-            const result = await geocodeAddress(address);
+            let result, locationData;
 
+            // Different processing for zipcodes vs locations
+            if (APP_CONFIG.groupType === 'zipcodes') {
+                // Process as zip code
+                const zipCode = address.trim();
+
+                // Validate zip code format
+                if (!/^\d{5}$/.test(zipCode)) {
+                    results.failed.push({
+                        address: address,
+                        reason: 'Invalid ZIP code format (must be 5 digits)'
+                    });
+                    continue;
+                }
+
+                // Lookup zip code
+                const zipResponse = await fetch('/api/zipcodes/lookup', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ zipCode })
+                });
+
+                if (zipResponse.ok) {
+                    const zipData = await zipResponse.json();
+
+                    // Get next color in rotation
+                    const color = bulkColors[bulkColorIndex % bulkColors.length];
+                    bulkColorIndex++;
+
+                    locationData = {
+                        lat: zipData.center.lat,
+                        lng: zipData.center.lng,
+                        title: zipData.title,
+                        color: color
+                    };
+
+                    // Include geometry if available
+                    if (zipData.geometry) {
+                        locationData.geometry = zipData.geometry;
+                    }
+
+                    result = { success: true };
+                } else {
+                    results.failed.push({
+                        address: address,
+                        reason: zipResponse.status === 404 ? 'ZIP code not found' : 'Lookup failed'
+                    });
+                    continue;
+                }
+            } else {
+                // Process as regular address
+                result = await geocodeAddress(address);
+
+                if (result.success) {
+                    // Get next color in rotation
+                    const color = bulkColors[bulkColorIndex % bulkColors.length];
+                    bulkColorIndex++;
+
+                    locationData = {
+                        lat: result.location.lat,
+                        lng: result.location.lng,
+                        title: result.formattedAddress,
+                        color: color
+                    };
+                } else {
+                    results.failed.push({
+                        address: address,
+                        reason: result.error || 'Address not found'
+                    });
+                    continue;
+                }
+            }
+
+            // Add to database (common for both types)
             if (result.success) {
-                // Get next color in rotation
-                const color = bulkColors[bulkColorIndex % bulkColors.length];
-                bulkColorIndex++;
-
-                const locationData = {
-                    lat: result.location.lat,
-                    lng: result.location.lng,
-                    title: result.formattedAddress,
-                    color: color
-                };
-
-                // Add to database
                 const newLocation = await addLocationToGroup(currentGroupId, locationData);
 
                 if (newLocation) {
-                    // Create marker on map
-                    createMarker(
-                        { lat: newLocation.lat, lng: newLocation.lng },
-                        newLocation.title,
-                        newLocation.color,
-                        newLocation.id
-                    );
+                    // Render on map (conditional)
+                    if (newLocation.geometry && APP_CONFIG.groupType === 'zipcodes') {
+                        createPolygonFromGeometry(
+                            newLocation.id,
+                            newLocation.geometry,
+                            newLocation.color,
+                            newLocation.title
+                        );
+                    } else {
+                        createMarker(
+                            { lat: newLocation.lat, lng: newLocation.lng },
+                            newLocation.title,
+                            newLocation.color,
+                            newLocation.id
+                        );
+                    }
 
                     results.successful.push({
                         address: address,
@@ -1658,11 +2125,6 @@ async function processBulkAddresses(addresses) {
                         reason: 'Failed to save to database'
                     });
                 }
-            } else {
-                results.failed.push({
-                    address: address,
-                    reason: result.error || 'Address not found'
-                });
             }
         } catch (error) {
             results.failed.push({
@@ -1809,13 +2271,25 @@ function cancelBulkProcessing() {
     closeProgressModal();
 }
 
-// Fit map to show all markers with smart padding and zoom limits
+// Fit map to show all markers and polygons with smart padding and zoom limits
 function fitMapToMarkers() {
-    if (markers.length === 0) return;
+    const polygonCount = Object.keys(polygons).length;
+
+    if (markers.length === 0 && polygonCount === 0) return;
 
     const bounds = new google.maps.LatLngBounds();
+
+    // Include markers
     markers.forEach(marker => {
         bounds.extend(marker.getPosition());
+    });
+
+    // Include polygon vertices
+    Object.values(polygons).forEach(polygon => {
+        const paths = polygon.getPath();
+        paths.forEach((path, index) => {
+            bounds.extend(path);
+        });
     });
 
     // Add padding options for better visual experience
@@ -1826,14 +2300,16 @@ function fitMapToMarkers() {
         left: 50
     };
 
-    // Adjust padding based on number of markers
-    if (markers.length === 1) {
-        // More padding for single markers to show context
+    const totalCount = markers.length + polygonCount;
+
+    // Adjust padding based on number of markers/polygons
+    if (totalCount === 1) {
+        // More padding for single items to show context
         padding.top = 100;
         padding.right = 100;
         padding.bottom = 100;
         padding.left = 100;
-    } else if (markers.length <= 3) {
+    } else if (totalCount <= 3) {
         // Medium padding for small groups
         padding.top = 80;
         padding.right = 80;
@@ -1849,10 +2325,10 @@ function fitMapToMarkers() {
         const currentZoom = map.getZoom();
         let targetZoom = currentZoom;
 
-        if (markers.length === 1) {
+        if (totalCount === 1 && markers.length === 1) {
             // For single markers, prefer street-level view but not too close
             targetZoom = Math.max(12, Math.min(currentZoom, 16));
-        } else if (markers.length <= 5) {
+        } else if (totalCount <= 5) {
             // Small groups: neighborhood level
             targetZoom = Math.max(10, Math.min(currentZoom, 15));
         } else {
@@ -2040,7 +2516,7 @@ document.head.appendChild(style);
 async function createTempGroup() {
     const tempName = `__temp_${Date.now()}`;
     try {
-        const response = await fetch('/api/location-groups', {
+        const response = await fetch(API_BASE, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -2087,7 +2563,7 @@ async function cleanupTempGroups() {
 
     for (const groupId of tempGroups) {
         try {
-            await fetch(`/api/location-groups/${groupId}`, {
+            await fetch(`${API_BASE}/${groupId}`, {
                 method: 'DELETE'
             });
         } catch (error) {
@@ -2198,7 +2674,7 @@ async function saveTempAddresses() {
 
         // Delete temporary group
         if (tempGroupId) {
-            await fetch(`/api/location-groups/${tempGroupId}`, {
+            await fetch(`${API_BASE}/${tempGroupId}`, {
                 method: 'DELETE'
             });
         }
@@ -2231,7 +2707,7 @@ async function discardTempAddresses() {
 
         // Delete temporary group
         if (tempGroupId) {
-            await fetch(`/api/location-groups/${tempGroupId}`, {
+            await fetch(`${API_BASE}/${tempGroupId}`, {
                 method: 'DELETE'
             });
         }

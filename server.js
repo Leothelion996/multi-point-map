@@ -4,14 +4,59 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const path = require('path');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { body, param, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
+const shapefile = require('shapefile');
 
 // Import database and middleware
 const DatabaseService = require('./db/database');
 const DeviceIdMiddleware = require('./middleware/deviceId');
+
+// ZIP code data cache (loaded on startup)
+let zipcodeData = null;
+let zipcodeDataLoaded = false;
+
+// Load ZIP code shapefile data into memory
+async function loadZipcodeData() {
+    try {
+        console.log('📂 Loading ZIP code boundary data...');
+        const startTime = Date.now();
+
+        const shapefileDir = path.join(__dirname, 'MapZipCodes', 'tl_2020_us_zcta520');
+        const shpPath = path.join(shapefileDir, 'tl_2020_us_zcta520.shp');
+
+        console.log('🔄 Parsing shapefile data...');
+
+        // Create lookup index for fast access
+        zipcodeData = {};
+        let count = 0;
+
+        // Read shapefile feature by feature
+        const source = await shapefile.open(shpPath);
+        let result = await source.read();
+
+        while (!result.done) {
+            const feature = result.value;
+            const zipCode = feature.properties.ZCTA5CE20;
+            if (zipCode) {
+                zipcodeData[zipCode] = feature.geometry;
+                count++;
+            }
+            result = await source.read();
+        }
+
+        zipcodeDataLoaded = true;
+        const loadTime = ((Date.now() - startTime) / 1000).toFixed(2);
+        console.log(`✅ Loaded ${count} ZIP codes in ${loadTime} seconds`);
+    } catch (error) {
+        console.error('❌ Error loading ZIP code data:', error);
+        console.error('ZIP code lookups will not be available');
+        zipcodeDataLoaded = false;
+    }
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -105,14 +150,89 @@ function defineRoutes() {
     });
 });
 
-app.get('/api/location-groups', async (req, res) => {
+// Zip code boundary lookup endpoint (using Census ZCTA data)
+app.post('/api/zipcodes/lookup', [
+    body('zipCode')
+        .isString()
+        .trim()
+        .matches(/^\d{5}$/)
+        .withMessage('ZIP code must be exactly 5 digits'),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const { zipCode } = req.body;
+
+        // Check if zipcode data is loaded
+        if (!zipcodeDataLoaded || !zipcodeData) {
+            return res.status(503).json({
+                error: 'ZIP code data not available. Server may still be loading.',
+                zipCode: zipCode
+            });
+        }
+
+        // Lookup ZIP code geometry from in-memory cache
+        const geometry = zipcodeData[zipCode];
+
+        if (!geometry) {
+            return res.status(404).json({
+                error: 'ZIP code not found',
+                zipCode: zipCode
+            });
+        }
+
+        // Calculate center point from geometry bounds
+        let centerLat = 0;
+        let centerLng = 0;
+        let pointCount = 0;
+
+        if (geometry.type === 'Polygon') {
+            geometry.coordinates[0].forEach(coord => {
+                centerLng += coord[0];
+                centerLat += coord[1];
+                pointCount++;
+            });
+        } else if (geometry.type === 'MultiPolygon') {
+            geometry.coordinates.forEach(polygon => {
+                polygon[0].forEach(coord => {
+                    centerLng += coord[0];
+                    centerLat += coord[1];
+                    pointCount++;
+                });
+            });
+        }
+
+        centerLat /= pointCount;
+        centerLng /= pointCount;
+
+        // Return response with accurate boundary geometry
+        const responseData = {
+            zipCode: zipCode,
+            title: `ZIP ${zipCode}`,
+            center: {
+                lat: centerLat,
+                lng: centerLng
+            },
+            formattedAddress: `ZIP Code ${zipCode}, USA`,
+            geometry: JSON.stringify(geometry)
+        };
+
+        res.json(responseData);
+    } catch (error) {
+        console.error('Error looking up ZIP code:', error);
+        res.status(500).json({ error: 'Failed to lookup ZIP code' });
+    }
+});
+
+app.get('/api/:groupType(locations|zipcodes)/groups', async (req, res) => {
     try {
         const deviceId = req.deviceId;
+        const { groupType } = req.params;
+
         if (!deviceId) {
             return res.status(400).json({ error: 'Device ID not found' });
         }
 
-        const groups = await db.getLocationGroups(deviceId);
+        const groups = await db.getLocationGroups(deviceId, groupType);
         res.json(groups);
     } catch (error) {
         console.error('Error fetching location groups:', error);
@@ -120,19 +240,19 @@ app.get('/api/location-groups', async (req, res) => {
     }
 });
 
-app.get('/api/location-groups/:id', [
+app.get('/api/:groupType(locations|zipcodes)/groups/:id', [
     param('id').isUUID().withMessage('Invalid group ID'),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id, groupType } = req.params;
         const deviceId = req.deviceId;
 
         if (!deviceId) {
             return res.status(400).json({ error: 'Device ID not found' });
         }
 
-        const group = await db.getLocationGroup(id, deviceId);
+        const group = await db.getLocationGroup(id, deviceId, groupType);
 
         if (!group) {
             return res.status(404).json({ error: 'Location group not found' });
@@ -145,7 +265,7 @@ app.get('/api/location-groups/:id', [
     }
 });
 
-app.post('/api/location-groups', [
+app.post('/api/:groupType(locations|zipcodes)/groups', [
     body('name')
         .isString()
         .trim()
@@ -175,13 +295,14 @@ app.post('/api/location-groups', [
 ], async (req, res) => {
     try {
         const { name, locations } = req.body;
+        const { groupType } = req.params;
         const deviceId = req.deviceId;
 
         if (!deviceId) {
             return res.status(400).json({ error: 'Device ID not found' });
         }
 
-        const group = await db.createLocationGroup(deviceId, name, locations || []);
+        const group = await db.createLocationGroup(deviceId, name, locations || [], groupType);
         res.status(201).json(group);
     } catch (error) {
         console.error('Error creating location group:', error);
@@ -189,7 +310,7 @@ app.post('/api/location-groups', [
     }
 });
 
-app.put('/api/location-groups/:id', [
+app.put('/api/:groupType(locations|zipcodes)/groups/:id', [
     param('id').isUUID().withMessage('Invalid group ID'),
     body('name')
         .optional()
@@ -205,7 +326,7 @@ app.put('/api/location-groups/:id', [
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id, groupType } = req.params;
         const { name, locations } = req.body;
         const deviceId = req.deviceId;
 
@@ -217,7 +338,7 @@ app.put('/api/location-groups/:id', [
         if (name !== undefined) updates.name = name;
         if (locations !== undefined) updates.locations = locations;
 
-        const updatedGroup = await db.updateLocationGroup(id, deviceId, updates);
+        const updatedGroup = await db.updateLocationGroup(id, deviceId, updates, groupType);
 
         if (!updatedGroup) {
             return res.status(404).json({ error: 'Location group not found' });
@@ -234,19 +355,19 @@ app.put('/api/location-groups/:id', [
     }
 });
 
-app.delete('/api/location-groups/:id', [
+app.delete('/api/:groupType(locations|zipcodes)/groups/:id', [
     param('id').isUUID().withMessage('Invalid group ID'),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { id } = req.params;
+        const { id, groupType } = req.params;
         const deviceId = req.deviceId;
 
         if (!deviceId) {
             return res.status(400).json({ error: 'Device ID not found' });
         }
 
-        await db.deleteLocationGroup(id, deviceId);
+        await db.deleteLocationGroup(id, deviceId, groupType);
         res.status(204).send();
     } catch (error) {
         console.error('Error deleting location group:', error);
@@ -258,7 +379,7 @@ app.delete('/api/location-groups/:id', [
     }
 });
 
-app.post('/api/location-groups/:id/locations', [
+app.post('/api/:groupType(locations|zipcodes)/groups/:id/locations', [
     param('id').isUUID().withMessage('Invalid group ID'),
     body('lat')
         .isFloat({ min: -90, max: 90 })
@@ -276,11 +397,15 @@ app.post('/api/location-groups/:id/locations', [
         .optional()
         .matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)
         .withMessage('Color must be a valid hex color'),
+    body('geometry')
+        .optional()
+        .isString()
+        .withMessage('Geometry must be a string (GeoJSON)'),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { id } = req.params;
-        const { lat, lng, title, color } = req.body;
+        const { id, groupType } = req.params;
+        const { lat, lng, title, color, geometry } = req.body;
         const deviceId = req.deviceId;
 
         if (!deviceId) {
@@ -294,6 +419,11 @@ app.post('/api/location-groups/:id/locations', [
             color: color || '#3B82F6'
         };
 
+        // Include geometry if provided
+        if (geometry) {
+            locationData.geometry = geometry;
+        }
+
         const location = await db.addLocationToGroup(id, deviceId, locationData);
         res.status(201).json(location);
     } catch (error) {
@@ -306,7 +436,7 @@ app.post('/api/location-groups/:id/locations', [
     }
 });
 
-app.put('/api/location-groups/:groupId/locations/:locationId', [
+app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locationId', [
     param('groupId').isUUID().withMessage('Invalid group ID'),
     param('locationId').isUUID().withMessage('Invalid location ID'),
     body('color')
@@ -316,7 +446,7 @@ app.put('/api/location-groups/:groupId/locations/:locationId', [
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { groupId, locationId } = req.params;
+        const { groupId, locationId, groupType } = req.params;
         const { color } = req.body;
         const deviceId = req.deviceId;
 
@@ -339,7 +469,7 @@ app.put('/api/location-groups/:groupId/locations/:locationId', [
     }
 });
 
-app.put('/api/location-groups/:groupId/locations/reorder', [
+app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/reorder', [
     param('groupId').isUUID().withMessage('Invalid group ID'),
     body('locationIds')
         .isArray()
@@ -353,7 +483,7 @@ app.put('/api/location-groups/:groupId/locations/reorder', [
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { groupId } = req.params;
+        const { groupId, groupType } = req.params;
         const { locationIds } = req.body;
         const deviceId = req.deviceId;
 
@@ -376,13 +506,13 @@ app.put('/api/location-groups/:groupId/locations/reorder', [
     }
 });
 
-app.delete('/api/location-groups/:groupId/locations/:locationId', [
+app.delete('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locationId', [
     param('groupId').isUUID().withMessage('Invalid group ID'),
     param('locationId').isUUID().withMessage('Invalid location ID'),
     handleValidationErrors
 ], async (req, res) => {
     try {
-        const { groupId, locationId } = req.params;
+        const { groupId, locationId, groupType } = req.params;
         const deviceId = req.deviceId;
 
         if (!deviceId) {
@@ -409,7 +539,11 @@ app.get('/', (req, res) => {
 // Initialize database and start server
 async function startServer() {
     try {
-        await initializeDatabase();
+        // Load ZIP code data and initialize database in parallel
+        await Promise.all([
+            loadZipcodeData(),
+            initializeDatabase()
+        ]);
 
         app.listen(PORT, () => {
             console.log(`Server running on http://localhost:${PORT}`);

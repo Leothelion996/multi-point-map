@@ -6,7 +6,8 @@ const { v4: uuidv4 } = require('uuid');
 class DatabaseService {
     constructor() {
         this.db = null;
-        this.dbPath = path.join(__dirname, '..', 'data', 'location_groups.db');
+        // Use separate database for feature branch
+        this.dbPath = path.join(__dirname, '..', 'data', 'location_groups_feature.db');
         this.isInitialized = false;
     }
 
@@ -84,6 +85,94 @@ class DatabaseService {
                     reject(err);
                 } else {
                     console.log('Database tables created successfully');
+                    // Run migrations
+                    this.migrateAddGroupType()
+                        .then(() => this.migrateAddGeometryColumn())
+                        .then(() => resolve())
+                        .catch((err) => reject(err));
+                }
+            });
+        });
+    }
+
+    // Migrate to add group_type column if it doesn't exist
+    async migrateAddGroupType() {
+        return new Promise((resolve, reject) => {
+            // Get all columns to check if group_type exists
+            this.db.all("PRAGMA table_info(location_groups)", [], (err, columns) => {
+                    if (err) {
+                        reject(err);
+                        return;
+                    }
+
+                    const hasGroupType = columns.some(col => col.name === 'group_type');
+
+                    if (!hasGroupType) {
+                        console.log('Adding group_type column to location_groups table...');
+                        // Add the column
+                        this.db.run("ALTER TABLE location_groups ADD COLUMN group_type TEXT DEFAULT 'locations'", (err) => {
+                            if (err) {
+                                console.error('Error adding group_type column:', err);
+                                reject(err);
+                                return;
+                            }
+
+                            console.log('Successfully added group_type column');
+                            // Set all existing records to 'locations'
+                            this.db.run("UPDATE location_groups SET group_type = 'locations' WHERE group_type IS NULL", (err) => {
+                                if (err) {
+                                    console.error('Error setting default group_type:', err);
+                                    reject(err);
+                                    return;
+                                }
+                                console.log('Migrated existing records to locations type');
+                                // Create index on group_type
+                                this.db.run("CREATE INDEX IF NOT EXISTS idx_location_groups_type ON location_groups(device_id, group_type)", (err) => {
+                                    if (err) {
+                                        console.error('Error creating group_type index:', err);
+                                        reject(err);
+                                        return;
+                                    }
+                                    console.log('Created index on group_type');
+                                    resolve();
+                                });
+                            });
+                        });
+                } else {
+                    // Column already exists
+                    resolve();
+                }
+            });
+        });
+    }
+
+    // Migrate to add geometry column if it doesn't exist
+    async migrateAddGeometryColumn() {
+        return new Promise((resolve, reject) => {
+            // Get all columns to check if geometry exists
+            this.db.all("PRAGMA table_info(locations)", [], (err, columns) => {
+                if (err) {
+                    reject(err);
+                    return;
+                }
+
+                const hasGeometry = columns.some(col => col.name === 'geometry');
+
+                if (!hasGeometry) {
+                    console.log('Adding geometry column to locations table...');
+                    // Add the column
+                    this.db.run("ALTER TABLE locations ADD COLUMN geometry TEXT", (err) => {
+                        if (err) {
+                            console.error('Error adding geometry column:', err);
+                            reject(err);
+                            return;
+                        }
+
+                        console.log('Successfully added geometry column');
+                        resolve();
+                    });
+                } else {
+                    // Column already exists
                     resolve();
                 }
             });
@@ -110,19 +199,19 @@ class DatabaseService {
     }
 
     // Get all location groups for a specific device
-    async getLocationGroups(deviceId) {
+    async getLocationGroups(deviceId, groupType = 'locations') {
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT lg.*,
                        COUNT(l.id) as location_count
                 FROM location_groups lg
                 LEFT JOIN locations l ON lg.id = l.group_id
-                WHERE lg.device_id = ?
-                GROUP BY lg.id, lg.device_id, lg.name, lg.created_at, lg.updated_at
+                WHERE lg.device_id = ? AND lg.group_type = ?
+                GROUP BY lg.id, lg.device_id, lg.name, lg.group_type, lg.created_at, lg.updated_at
                 ORDER BY lg.created_at DESC
             `;
 
-            this.db.all(sql, [deviceId], async (err, rows) => {
+            this.db.all(sql, [deviceId, groupType], async (err, rows) => {
                 if (err) {
                     console.error('Error fetching location groups:', err);
                     reject(err);
@@ -153,14 +242,14 @@ class DatabaseService {
     }
 
     // Get a specific location group by ID (with device verification)
-    async getLocationGroup(groupId, deviceId) {
+    async getLocationGroup(groupId, deviceId, groupType = 'locations') {
         return new Promise((resolve, reject) => {
             const sql = `
                 SELECT * FROM location_groups
-                WHERE id = ? AND device_id = ?
+                WHERE id = ? AND device_id = ? AND group_type = ?
             `;
 
-            this.db.get(sql, [groupId, deviceId], async (err, row) => {
+            this.db.get(sql, [groupId, deviceId, groupType], async (err, row) => {
                 if (err) {
                     console.error('Error fetching location group:', err);
                     reject(err);
@@ -189,7 +278,7 @@ class DatabaseService {
     }
 
     // Create a new location group
-    async createLocationGroup(deviceId, name, locations = []) {
+    async createLocationGroup(deviceId, name, locations = [], groupType = 'locations') {
         return new Promise((resolve, reject) => {
             const groupId = uuidv4();
             const now = new Date().toISOString();
@@ -200,11 +289,11 @@ class DatabaseService {
 
                 // Insert location group
                 const insertGroupSQL = `
-                    INSERT INTO location_groups (id, device_id, name, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO location_groups (id, device_id, name, group_type, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 `;
 
-                db.run(insertGroupSQL, [groupId, deviceId, name, now, now], async (err) => {
+                db.run(insertGroupSQL, [groupId, deviceId, name, groupType, now, now], async (err) => {
                     if (err) {
                         db.run('ROLLBACK');
                         reject(err);
@@ -240,7 +329,7 @@ class DatabaseService {
     }
 
     // Update a location group
-    async updateLocationGroup(groupId, deviceId, updates) {
+    async updateLocationGroup(groupId, deviceId, updates, groupType = 'locations') {
         return new Promise((resolve, reject) => {
             const now = new Date().toISOString();
             let sql = 'UPDATE location_groups SET updated_at = ?';
@@ -251,8 +340,8 @@ class DatabaseService {
                 params.push(updates.name);
             }
 
-            sql += ' WHERE id = ? AND device_id = ?';
-            params.push(groupId, deviceId);
+            sql += ' WHERE id = ? AND device_id = ? AND group_type = ?';
+            params.push(groupId, deviceId, groupType);
 
             this.db.run(sql, params, async (err) => {
                 if (err) {
@@ -273,7 +362,7 @@ class DatabaseService {
                     }
 
                     // Return updated group
-                    const updatedGroup = await this.getLocationGroup(groupId, deviceId);
+                    const updatedGroup = await this.getLocationGroup(groupId, deviceId, groupType);
                     resolve(updatedGroup);
                 } catch (error) {
                     reject(error);
@@ -283,7 +372,7 @@ class DatabaseService {
     }
 
     // Delete a location group
-    async deleteLocationGroup(groupId, deviceId) {
+    async deleteLocationGroup(groupId, deviceId, groupType = 'locations') {
         return new Promise((resolve, reject) => {
             const db = this.db; // Store reference to avoid context issues
 
@@ -300,8 +389,8 @@ class DatabaseService {
 
                     // Delete group
                     db.run(
-                        'DELETE FROM location_groups WHERE id = ? AND device_id = ?',
-                        [groupId, deviceId],
+                        'DELETE FROM location_groups WHERE id = ? AND device_id = ? AND group_type = ?',
+                        [groupId, deviceId, groupType],
                         function(err) {
                             if (err) {
                                 db.run('ROLLBACK');
@@ -343,13 +432,20 @@ class DatabaseService {
                     console.error('Error fetching locations:', err);
                     reject(err);
                 } else {
-                    const locations = rows.map(row => ({
-                        id: row.id,
-                        lat: row.lat,
-                        lng: row.lng,
-                        title: row.title,
-                        color: row.color
-                    }));
+                    const locations = rows.map(row => {
+                        const location = {
+                            id: row.id,
+                            lat: row.lat,
+                            lng: row.lng,
+                            title: row.title,
+                            color: row.color
+                        };
+                        // Include geometry if present
+                        if (row.geometry) {
+                            location.geometry = row.geometry;
+                        }
+                        return location;
+                    });
                     resolve(locations);
                 }
             });
@@ -379,15 +475,16 @@ class DatabaseService {
                     const now = new Date().toISOString();
 
                     const insertSQL = `
-                        INSERT INTO locations (id, group_id, lat, lng, title, color, order_index, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?,
+                        INSERT INTO locations (id, group_id, lat, lng, title, color, geometry, order_index, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?,
                                 (SELECT COALESCE(MAX(order_index), 0) + 1 FROM locations WHERE group_id = ?),
                                 ?)
                     `;
 
                     this.db.run(insertSQL, [
                         locationId, groupId, locationData.lat, locationData.lng,
-                        locationData.title, locationData.color || '#3B82F6', groupId, now
+                        locationData.title, locationData.color || '#3B82F6',
+                        locationData.geometry || null, groupId, now
                     ], (err) => {
                         if (err) {
                             console.error('Error adding location:', err);
@@ -399,13 +496,20 @@ class DatabaseService {
                                 [now, groupId]
                             );
 
-                            resolve({
+                            const result = {
                                 id: locationId,
                                 lat: locationData.lat,
                                 lng: locationData.lng,
                                 title: locationData.title,
                                 color: locationData.color || '#3B82F6'
-                            });
+                            };
+
+                            // Include geometry if present
+                            if (locationData.geometry) {
+                                result.geometry = locationData.geometry;
+                            }
+
+                            resolve(result);
                         }
                     });
                 }
@@ -435,13 +539,14 @@ class DatabaseService {
                     const now = new Date().toISOString();
 
                     const insertSQL = `
-                        INSERT INTO locations (id, group_id, lat, lng, title, color, order_index, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO locations (id, group_id, lat, lng, title, color, geometry, order_index, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     `;
 
                     db.run(insertSQL, [
                         locationId, groupId, location.lat, location.lng,
-                        location.title, location.color || '#3B82F6', index, now
+                        location.title, location.color || '#3B82F6',
+                        location.geometry || null, index, now
                     ], function(err) {
                         if (err && !hasError) {
                             hasError = true;
@@ -451,13 +556,20 @@ class DatabaseService {
                         }
 
                         if (!hasError) {
-                            results.push({
+                            const result = {
                                 id: locationId,
                                 lat: location.lat,
                                 lng: location.lng,
                                 title: location.title,
                                 color: location.color || '#3B82F6'
-                            });
+                            };
+
+                            // Include geometry if present
+                            if (location.geometry) {
+                                result.geometry = location.geometry;
+                            }
+
+                            results.push(result);
 
                             completedCount++;
                             if (completedCount === locations.length) {
