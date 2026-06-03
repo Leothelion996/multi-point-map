@@ -3,7 +3,8 @@
     "allow": [
       "Bash(curl:*)",
       "Bash(taskkill:*)",
-      "Bash(npm start)"
+      "Bash(npm start)",
+      "Bash(node -e:*)"
     ],
     "deny": [],
     "ask": []
