@@ -8,6 +8,7 @@
     "dev": "nodemon server.js"
   },
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "body-parser": "^1.20.2",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
@@ -17,7 +18,7 @@
     "express-validator": "^7.0.1",
     "helmet": "^7.1.0",
     "shapefile": "^0.6.6",
-    "sqlite3": "^5.1.6",
+    "pg": "^8.13.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

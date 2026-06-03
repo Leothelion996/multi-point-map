@@ -193,7 +193,8 @@ class APIService {
     }
 
     async updateLocation(groupId, locationId, data) {
-        return this.request(`/location-groups/${groupId}/locations/${locationId}`, {
+        const groupType = APP_CONFIG.groupType;
+        return this.request(`/${groupType}/groups/${groupId}/locations/${locationId}`, {
             method: 'PUT',
             body: data
         });
@@ -298,6 +299,11 @@ function createNumberedMarkerIcon(number, color, isSelected = false, zoomLevel =
 async function loadConfig() {
     try {
         const response = await fetch('/api/config');
+
+        if (response.status === 401) {
+            window.location.href = '/login.html';
+            return;
+        }
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
@@ -578,17 +584,33 @@ function initMap() {
     // Initialize autocomplete for search input
     const searchInput = document.getElementById('location-search');
 
+    // Defensive check: Ensure APP_CONFIG is properly initialized
+    if (typeof APP_CONFIG === 'undefined' || !APP_CONFIG.groupType) {
+        console.error('APP_CONFIG not properly initialized - search handlers will not be attached');
+        return;
+    }
+
     // For zipcodes page, use different behavior
     if (APP_CONFIG.groupType === 'zipcodes') {
         // Add keypress listener for zip code entry
         searchInput.addEventListener('keypress', async function(e) {
             if (e.key === 'Enter') {
+                // Prevent double-submission if already processing
+                if (this.disabled) return;
+
                 const input = this.value.trim();
 
                 // Check if input is a 5-digit zip code
                 if (/^\d{5}$/.test(input)) {
-                    await addZipCodeFromInput(input);
-                    this.value = '';
+                    // Disable input during processing to prevent double-submission
+                    this.disabled = true;
+                    try {
+                        await addZipCodeFromInput(input);
+                        this.value = '';
+                    } finally {
+                        this.disabled = false;
+                        this.focus();
+                    }
                 } else {
                     showPopup('warning', 'Please enter a valid 5-digit ZIP code', 'Invalid Input');
                 }
@@ -697,37 +719,39 @@ function initMap() {
     const zoomLevelDisplay = document.getElementById('zoom-level-display');
 
     if (fineZoomInBtn && fineZoomOutBtn && zoomLevelDisplay) {
+        let currentFractionalZoom = map.getZoom();
+
         fineZoomInBtn.addEventListener('click', function() {
-            const currentZoom = map.getZoom();
-            const newZoom = Math.min(20, currentZoom + 0.25);
-            map.setZoom(newZoom);
-            updateZoomDisplay(newZoom);
+            currentFractionalZoom = Math.min(20, currentFractionalZoom + 0.1);
+            map.setZoom(currentFractionalZoom);
+            updateZoomDisplay(currentFractionalZoom);
         });
 
         fineZoomOutBtn.addEventListener('click', function() {
-            const currentZoom = map.getZoom();
-            const newZoom = Math.max(1, currentZoom - 0.25);
-            map.setZoom(newZoom);
-            updateZoomDisplay(newZoom);
+            currentFractionalZoom = Math.max(1, currentFractionalZoom - 0.1);
+            map.setZoom(currentFractionalZoom);
+            updateZoomDisplay(currentFractionalZoom);
         });
 
-        // Update zoom display when map zoom changes
         map.addListener('zoom_changed', function() {
-            updateZoomDisplay(map.getZoom());
+            const z = map.getZoom();
+            // Sync only when zoom changed from outside (scroll wheel, native controls)
+            if (Math.abs(z - currentFractionalZoom) > 0.5) {
+                currentFractionalZoom = z;
+            }
+            updateZoomDisplay(currentFractionalZoom);
         });
 
-        // Function to update zoom level display
         function updateZoomDisplay(zoomLevel) {
             zoomLevelDisplay.textContent = zoomLevel.toFixed(1);
         }
 
-        // Initialize zoom display
-        updateZoomDisplay(map.getZoom());
+        updateZoomDisplay(currentFractionalZoom);
     }
 
-    // Add enter key support for search input
+    // Add enter key support for search input (only for non-zipcodes pages)
     const locationSearch = document.getElementById('location-search');
-    if (locationSearch) {
+    if (locationSearch && typeof APP_CONFIG !== 'undefined' && APP_CONFIG.groupType !== 'zipcodes') {
         locationSearch.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
@@ -936,147 +960,168 @@ function createPolygonFromGeometry(locationId, geometryJson, color, title) {
     try {
         const geometry = JSON.parse(geometryJson);
 
-        if (geometry.type !== 'Polygon' || !geometry.coordinates || !geometry.coordinates[0]) {
-            console.error('Invalid polygon geometry:', geometry);
+        // Determine coordinate sets based on geometry type
+        let coordinateSets = [];
+
+        if (geometry.type === 'Polygon' && geometry.coordinates && geometry.coordinates[0]) {
+            // Single Polygon: coordinates is an array of rings, first ring is outer boundary
+            coordinateSets = [geometry.coordinates];
+        } else if (geometry.type === 'MultiPolygon' && geometry.coordinates) {
+            // MultiPolygon: coordinates is an array of Polygon coordinate arrays
+            coordinateSets = geometry.coordinates;
+        } else {
+            console.error('Invalid or unsupported polygon geometry:', geometry);
+            showPopup('warning', 'ZIP code boundary data unavailable or unsupported format', 'Polygon Error');
             return null;
         }
 
-        // Convert GeoJSON coordinates [lng, lat] to Google Maps LatLng {lat, lng}
-        const paths = geometry.coordinates[0].map(coord => ({
-            lat: coord[1],
-            lng: coord[0]
-        }));
+        // Create array to hold all polygon instances for this location
+        const polygonInstances = [];
 
-        // Create the polygon
-        const polygon = new google.maps.Polygon({
-            paths: paths,
-            strokeColor: color,
-            strokeOpacity: 0.8,
-            strokeWeight: 2,
-            fillColor: color,
-            fillOpacity: 0.35,
-            map: map,
-            locationId: locationId,
-            title: title
-        });
+        coordinateSets.forEach((polygonCoords, partIndex) => {
+            // Convert GeoJSON coordinates [lng, lat] to Google Maps LatLng {lat, lng}
+            // Use the first ring (outer boundary) of each polygon
+            const paths = polygonCoords[0].map(coord => ({
+                lat: coord[1],
+                lng: coord[0]
+            }));
 
-        // Store polygon reference
-        polygons[locationId] = polygon;
+            // Create the polygon
+            const polygon = new google.maps.Polygon({
+                paths: paths,
+                strokeColor: color,
+                strokeOpacity: 0.8,
+                strokeWeight: 2,
+                fillColor: color,
+                fillOpacity: 0.35,
+                map: map,
+                locationId: locationId,
+                title: title,
+                partIndex: partIndex  // Track which part of a MultiPolygon this is
+            });
 
-        // Extend bounds to include all polygon vertices
-        paths.forEach(coord => {
-            bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
-        });
+            polygonInstances.push(polygon);
 
-        // Add click listener to show info window
-        polygon.addListener('click', (event) => {
-            const content = document.createElement('div');
-            content.className = 'marker-popup';
+            // Extend bounds to include all polygon vertices
+            paths.forEach(coord => {
+                bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
+            });
 
-            // Title
-            const titleElement = document.createElement('h3');
-            titleElement.className = 'font-medium text-gray-900';
-            titleElement.textContent = title;
+            // Add click listener to show info window
+            polygon.addListener('click', (event) => {
+                const content = document.createElement('div');
+                content.className = 'marker-popup';
 
-            // Color picker section
-            const colorSection = document.createElement('div');
-            colorSection.className = 'mt-2 mb-2';
+                // Title
+                const titleElement = document.createElement('h3');
+                titleElement.className = 'font-medium text-gray-900';
+                titleElement.textContent = title;
 
-            const colorLabel = document.createElement('div');
-            colorLabel.className = 'text-xs font-medium text-gray-700 mb-1';
-            colorLabel.textContent = 'Change Color:';
+                // Color picker section
+                const colorSection = document.createElement('div');
+                colorSection.className = 'mt-2 mb-2';
 
-            const colorPicker = document.createElement('div');
-            colorPicker.className = 'flex space-x-1';
+                const colorLabel = document.createElement('div');
+                colorLabel.className = 'text-xs font-medium text-gray-700 mb-1';
+                colorLabel.textContent = 'Change Color:';
 
-            // Define available colors
-            const colors = [
-                { name: 'Red', value: '#ef4444', class: 'bg-red-500' },
-                { name: 'Blue', value: '#3b82f6', class: 'bg-blue-500' },
-                { name: 'Green', value: '#10b981', class: 'bg-green-500' },
-                { name: 'Yellow', value: '#f59e0b', class: 'bg-yellow-500' },
-                { name: 'Purple', value: '#8b5cf6', class: 'bg-purple-500' },
-                { name: 'Pink', value: '#ec4899', class: 'bg-pink-500' },
-                { name: 'Orange', value: '#f97316', class: 'bg-orange-500' },
-                { name: 'Gray', value: '#6b7280', class: 'bg-gray-500' }
-            ];
+                const colorPicker = document.createElement('div');
+                colorPicker.className = 'flex space-x-1';
 
-            colors.forEach(colorOption => {
-                const colorButton = document.createElement('button');
-                colorButton.className = `w-5 h-5 rounded-full ${colorOption.class} border-2 border-gray-300 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-500`;
-                colorButton.title = `Change to ${colorOption.name}`;
+                // Define available colors
+                const colors = [
+                    { name: 'Red', value: '#ef4444', class: 'bg-red-500' },
+                    { name: 'Blue', value: '#3b82f6', class: 'bg-blue-500' },
+                    { name: 'Green', value: '#10b981', class: 'bg-green-500' },
+                    { name: 'Yellow', value: '#f59e0b', class: 'bg-yellow-500' },
+                    { name: 'Purple', value: '#8b5cf6', class: 'bg-purple-500' },
+                    { name: 'Pink', value: '#ec4899', class: 'bg-pink-500' },
+                    { name: 'Orange', value: '#f97316', class: 'bg-orange-500' },
+                    { name: 'Gray', value: '#6b7280', class: 'bg-gray-500' }
+                ];
 
-                // Highlight current color
-                if (color === colorOption.value) {
-                    colorButton.classList.add('ring-2', 'ring-offset-1', 'ring-gray-500');
-                }
+                colors.forEach(colorOption => {
+                    const colorButton = document.createElement('button');
+                    colorButton.className = `w-5 h-5 rounded-full ${colorOption.class} border-2 border-gray-300 hover:border-gray-400 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-gray-500`;
+                    colorButton.title = `Change to ${colorOption.name}`;
 
-                colorButton.addEventListener('click', async () => {
-                    try {
-                        // Update polygon color via API
-                        await apiService.updateLocation(currentGroupId, locationId, {
-                            color: colorOption.value
-                        });
-
-                        // Update polygon locally
-                        updatePolygonColor(locationId, colorOption.value);
-
-                        // Close popup
-                        infoWindow.close();
-
-                        // Show success notification
-                        showPopup('success', `Color changed to ${colorOption.name}`, 'Color Updated');
-
-                    } catch (error) {
-                        console.error('Error updating polygon color:', error);
-                        showPopup('error', 'Failed to update color. Please try again.', 'Update Failed');
+                    // Highlight current color
+                    if (color === colorOption.value) {
+                        colorButton.classList.add('ring-2', 'ring-offset-1', 'ring-gray-500');
                     }
+
+                    colorButton.addEventListener('click', async () => {
+                        try {
+                            // Update polygon color via API
+                            await apiService.updateLocation(currentGroupId, locationId, {
+                                color: colorOption.value
+                            });
+
+                            // Update polygon locally
+                            updatePolygonColor(locationId, colorOption.value);
+
+                            // Close popup
+                            infoWindow.close();
+
+                            // Show success notification
+                            showPopup('success', `Color changed to ${colorOption.name}`, 'Color Updated');
+
+                        } catch (error) {
+                            console.error('Error updating polygon color:', error);
+                            showPopup('error', 'Failed to update color. Please try again.', 'Update Failed');
+                        }
+                    });
+
+                    colorPicker.appendChild(colorButton);
                 });
 
-                colorPicker.appendChild(colorButton);
+                colorSection.appendChild(colorLabel);
+                colorSection.appendChild(colorPicker);
+
+                // Delete button
+                const buttonContainer = document.createElement('div');
+                buttonContainer.className = 'mt-2 flex space-x-2';
+
+                const deleteButton = document.createElement('button');
+                deleteButton.className = 'text-xs px-2 py-1 bg-red-100 text-red-800 rounded hover:bg-red-200';
+                deleteButton.textContent = 'Delete';
+                deleteButton.addEventListener('click', () => deleteMarker(locationId));
+
+                buttonContainer.appendChild(deleteButton);
+
+                // Assemble content
+                content.appendChild(titleElement);
+                content.appendChild(colorSection);
+                content.appendChild(buttonContainer);
+
+                // Show info window at click location
+                infoWindow.setContent(content);
+                infoWindow.setPosition(event.latLng);
+                infoWindow.open(map);
             });
 
-            colorSection.appendChild(colorLabel);
-            colorSection.appendChild(colorPicker);
-
-            // Delete button
-            const buttonContainer = document.createElement('div');
-            buttonContainer.className = 'mt-2 flex space-x-2';
-
-            const deleteButton = document.createElement('button');
-            deleteButton.className = 'text-xs px-2 py-1 bg-red-100 text-red-800 rounded hover:bg-red-200';
-            deleteButton.textContent = 'Delete';
-            deleteButton.addEventListener('click', () => deleteMarker(locationId));
-
-            buttonContainer.appendChild(deleteButton);
-
-            // Assemble content
-            content.appendChild(titleElement);
-            content.appendChild(colorSection);
-            content.appendChild(buttonContainer);
-
-            // Show info window at click location
-            infoWindow.setContent(content);
-            infoWindow.setPosition(event.latLng);
-            infoWindow.open(map);
-        });
-
-        // Add mouseover/mouseout for hover effect
-        polygon.addListener('mouseover', () => {
-            polygon.setOptions({
-                fillOpacity: 0.5,
-                strokeWeight: 3
+            // Add mouseover/mouseout for hover effect (highlights all parts of MultiPolygon)
+            polygon.addListener('mouseover', () => {
+                polygonInstances.forEach(p => p.setOptions({
+                    fillOpacity: 0.5,
+                    strokeWeight: 3
+                }));
             });
-        });
 
-        polygon.addListener('mouseout', () => {
-            polygon.setOptions({
-                fillOpacity: 0.35,
-                strokeWeight: 2
+            polygon.addListener('mouseout', () => {
+                polygonInstances.forEach(p => p.setOptions({
+                    fillOpacity: 0.35,
+                    strokeWeight: 2
+                }));
             });
         });
 
-        return polygon;
+        // Store polygon instance(s) - array for MultiPolygon, single for Polygon
+        // Always store as array for consistent handling
+        polygons[locationId] = polygonInstances;
+
+        // Return the first polygon (for backward compatibility) or array
+        return polygonInstances.length === 1 ? polygonInstances[0] : polygonInstances;
 
     } catch (error) {
         console.error('Error creating polygon from geometry:', error);
@@ -1090,7 +1135,13 @@ function createPolygonFromGeometry(locationId, geometryJson, color, title) {
  */
 function removePolygon(locationId) {
     if (polygons[locationId]) {
-        polygons[locationId].setMap(null);
+        // Handle both array (MultiPolygon) and single polygon cases
+        const polygonData = polygons[locationId];
+        if (Array.isArray(polygonData)) {
+            polygonData.forEach(p => p.setMap(null));
+        } else {
+            polygonData.setMap(null);
+        }
         delete polygons[locationId];
     }
 }
@@ -1102,10 +1153,19 @@ function removePolygon(locationId) {
  */
 function updatePolygonColor(locationId, newColor) {
     if (polygons[locationId]) {
-        polygons[locationId].setOptions({
-            strokeColor: newColor,
-            fillColor: newColor
-        });
+        // Handle both array (MultiPolygon) and single polygon cases
+        const polygonData = polygons[locationId];
+        if (Array.isArray(polygonData)) {
+            polygonData.forEach(p => p.setOptions({
+                strokeColor: newColor,
+                fillColor: newColor
+            }));
+        } else {
+            polygonData.setOptions({
+                strokeColor: newColor,
+                fillColor: newColor
+            });
+        }
     }
 }
 
@@ -1113,7 +1173,14 @@ function updatePolygonColor(locationId, newColor) {
  * Clear all polygons from the map
  */
 function clearPolygons() {
-    Object.values(polygons).forEach(polygon => polygon.setMap(null));
+    Object.values(polygons).forEach(polygonData => {
+        // Handle both array (MultiPolygon) and single polygon cases
+        if (Array.isArray(polygonData)) {
+            polygonData.forEach(p => p.setMap(null));
+        } else {
+            polygonData.setMap(null);
+        }
+    });
     polygons = {};
 }
 
@@ -1197,11 +1264,11 @@ function updateMarkerList() {
         item.dataset.markerIndex = index;
         item.draggable = true;
 
-        // Create numbered color indicator
+        // Create numbered color indicator with M prefix for markers
         const colorIndicator = document.createElement('div');
         colorIndicator.className = 'marker-numbered-color-indicator';
         colorIndicator.style.backgroundColor = marker.originalColor;
-        colorIndicator.textContent = markerNumber;
+        colorIndicator.textContent = `${markerNumber}`;
 
         // Create title span safely
         const titleSpan = document.createElement('span');
@@ -1248,22 +1315,27 @@ function updateMarkerList() {
 
     // Display polygons (for ZIP codes)
     let polygonIndex = 0;
-    Object.entries(polygons).forEach(([locationId, polygon]) => {
+    Object.entries(polygons).forEach(([locationId, polygonData]) => {
         polygonIndex++;
+
+        // Handle both array (MultiPolygon) and single polygon cases
+        // Get the first polygon for properties (all parts share the same color/title)
+        const firstPolygon = Array.isArray(polygonData) ? polygonData[0] : polygonData;
+
         const item = document.createElement('div');
         item.className = 'marker-list-item';
         item.dataset.locationId = locationId;
 
-        // Create numbered color indicator
+        // Create numbered color indicator with Z prefix for ZIP codes
         const colorIndicator = document.createElement('div');
         colorIndicator.className = 'marker-numbered-color-indicator';
-        colorIndicator.style.backgroundColor = polygon.strokeColor || polygon.fillColor;
-        colorIndicator.textContent = polygonIndex;
+        colorIndicator.style.backgroundColor = firstPolygon.strokeColor || firstPolygon.fillColor;
+        colorIndicator.textContent = `${polygonIndex}`;
 
         // Create title span safely
         const titleSpan = document.createElement('span');
         titleSpan.className = 'text-sm text-gray-700 flex-1';
-        titleSpan.textContent = polygon.title || `ZIP Code ${polygonIndex}`;
+        titleSpan.textContent = firstPolygon.title || `ZIP Code ${polygonIndex}`;
 
         // Create delete button safely
         const deleteButton = document.createElement('button');
@@ -1282,9 +1354,13 @@ function updateMarkerList() {
 
         item.addEventListener('click', function(e) {
             if (!e.target.closest('button')) {
-                // Get bounds of polygon and fit map to it
+                // Get bounds of all polygon parts and fit map to it
                 const bounds = new google.maps.LatLngBounds();
-                polygon.getPath().forEach(coord => bounds.extend(coord));
+                if (Array.isArray(polygonData)) {
+                    polygonData.forEach(p => p.getPath().forEach(coord => bounds.extend(coord)));
+                } else {
+                    polygonData.getPath().forEach(coord => bounds.extend(coord));
+                }
                 map.fitBounds(bounds);
 
                 document.querySelectorAll('.marker-list-item').forEach(i =>
@@ -1469,9 +1545,12 @@ async function addZipCodeFromInput(zipCode) {
 
         // Add to database
         const newLocation = await addLocationToGroup(currentGroupId, locationData);
+        console.log('DEBUG newLocation:', newLocation);
+        console.log('DEBUG newLocation.geometry:', newLocation?.geometry);
         if (newLocation) {
             // Render on map
             if (newLocation.geometry) {
+                console.log('DEBUG: Calling createPolygonFromGeometry with geometry');
                 createPolygonFromGeometry(
                     newLocation.id,
                     newLocation.geometry,
@@ -1479,7 +1558,8 @@ async function addZipCodeFromInput(zipCode) {
                     newLocation.title
                 );
             } else {
-                // Fallback to marker if no geometry
+                // Fallback to marker if no geometry - inform user
+                showPopup('info', 'No boundary data available for this ZIP code. Showing as marker instead.', 'Notice');
                 createMarker(
                     { lat: newLocation.lat, lng: newLocation.lng },
                     newLocation.title,
@@ -1655,6 +1735,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Load configuration when page loads
     loadConfig();
+
+    // Logout button
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', async () => {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.href = '/login.html';
+        });
+    }
 });
 
 // Marker selection functions
@@ -2135,7 +2224,7 @@ async function processBulkAddresses(addresses) {
 
         // Add delay to respect API rate limits
         if (i < addresses.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 1200));
         }
     }
 

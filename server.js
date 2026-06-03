@@ -10,6 +10,7 @@ const { body, param, validationResult } = require('express-validator');
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const shapefile = require('shapefile');
+const crypto = require('crypto');
 
 // Import database and middleware
 const DatabaseService = require('./db/database');
@@ -108,21 +109,47 @@ const handleValidationErrors = (req, res, next) => {
 
 app.use(express.static(path.join(__dirname)));
 
+// In-memory session store: sessionId -> { userId, username }
+const sessions = new Map();
+
+function createSession(userId, username) {
+    const sessionId = crypto.randomBytes(32).toString('hex');
+    sessions.set(sessionId, { userId, username });
+    return sessionId;
+}
+
+function getSession(sessionId) {
+    return sessionId ? sessions.get(sessionId) : null;
+}
+
+function destroySession(sessionId) {
+    sessions.delete(sessionId);
+}
+
+// Auth middleware — protects API routes and HTML pages
+function requireAuth(req, res, next) {
+    const sessionId = req.cookies['sessionId'];
+    const session = getSession(sessionId);
+    if (!session) {
+        if (req.path.startsWith('/api/')) {
+            return res.status(401).json({ error: 'Not authenticated' });
+        }
+        return res.redirect('/login.html');
+    }
+    req.deviceId = session.userId;
+    req.username = session.username;
+    next();
+}
+
 // Initialize database and device ID middleware
 let db;
-let deviceIdMiddleware;
 
 async function initializeDatabase() {
     try {
         db = new DatabaseService();
         await db.initialize();
 
-        deviceIdMiddleware = new DeviceIdMiddleware(db);
-
-        // Apply device ID middleware to all API routes
-        app.use('/api/', deviceIdMiddleware.middleware());
-
-        // Define routes after middleware is set up
+        // Define routes after db is ready
         defineRoutes();
 
         console.log('Database and middleware initialized successfully');
@@ -133,22 +160,77 @@ async function initializeDatabase() {
 }
 
 function defineRoutes() {
-    // Security: Simple referrer check for API key endpoint
-    app.get('/api/config', (req, res) => {
-    const referrer = req.get('Referrer') || req.get('Referer');
-    const allowedReferrers = process.env.NODE_ENV === 'production'
-        ? ['https://yourdomain.com'] // Replace with your actual domain
-        : ['http://localhost:3000', 'http://127.0.0.1:3000'];
-
-    // Check if request is from allowed referrer or no referrer (for direct file access)
-    if (referrer && !allowedReferrers.some(allowed => referrer.startsWith(allowed))) {
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-
-    res.json({
-        googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY
+    // Auth routes (no auth required)
+    app.post('/api/auth/register', [
+        body('username').isString().trim().isLength({ min: 1, max: 50 }).escape(),
+        body('password').isString().isLength({ min: 1 }),
+        handleValidationErrors
+    ], async (req, res) => {
+        try {
+            const hasUsers = await db.hasUsers();
+            if (hasUsers) {
+                return res.status(403).json({ error: 'Registration is closed' });
+            }
+            const { username, password } = req.body;
+            const user = await db.createUser(username, password);
+            const sessionId = createSession(user.id, user.username);
+            res.cookie('sessionId', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000 });
+            res.json({ username: user.username });
+        } catch (err) {
+            res.status(400).json({ error: err.message });
+        }
     });
-});
+
+    app.post('/api/auth/login', [
+        body('username').isString().trim().isLength({ min: 1 }).escape(),
+        body('password').isString().isLength({ min: 1 }),
+        handleValidationErrors
+    ], async (req, res) => {
+        try {
+            const { username, password } = req.body;
+            const user = await db.verifyUser(username, password);
+            if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+            const sessionId = createSession(user.id, user.username);
+            res.cookie('sessionId', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000 });
+            res.json({ username: user.username });
+        } catch (err) {
+            res.status(500).json({ error: 'Login failed' });
+        }
+    });
+
+    app.post('/api/auth/logout', (req, res) => {
+        const sessionId = req.cookies['sessionId'];
+        destroySession(sessionId);
+        res.clearCookie('sessionId');
+        res.json({ ok: true });
+    });
+
+    app.get('/api/auth/me', (req, res) => {
+        const session = getSession(req.cookies['sessionId']);
+        if (!session) return res.status(401).json({ error: 'Not authenticated' });
+        res.json({ username: session.username });
+    });
+
+    app.get('/api/auth/has-users', async (req, res) => {
+        const hasUsers = await db.hasUsers();
+        res.json({ hasUsers });
+    });
+
+    // Protect map pages
+    app.get('/', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+    app.get('/index.html', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
+    app.get('/zipcodes.html', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'zipcodes.html')));
+
+    // Apply auth to all data API routes
+    app.use('/api/config', requireAuth);
+    app.use('/api/zipcodes', requireAuth);
+    app.use('/api/locations', requireAuth);
+
+    app.get('/api/config', (req, res) => {
+        res.json({
+            googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY
+        });
+    });
 
 // Zip code boundary lookup endpoint (using Census ZCTA data)
 app.post('/api/zipcodes/lookup', [
@@ -532,9 +614,6 @@ app.delete('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locat
 });
 }
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
 
 // Initialize database and start server
 async function startServer() {
