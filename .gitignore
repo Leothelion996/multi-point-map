@@ -53,6 +53,7 @@ Thumbs.db
 *.sqlite
 *.sqlite3
 data/
+.md
 
 # Cookie files
 cookies.txt
