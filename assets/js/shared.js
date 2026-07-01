@@ -140,11 +140,16 @@ function getCurrentPage() {
         return 'map';
     }
 
+    if (filename === 'zipcodes.html') {
+        return 'zipcodes';
+    }
+
     return filename.replace('.html', '');
 }
 
 function isMapPage() {
-    return getCurrentPage() === 'map';
+    const page = getCurrentPage();
+    return page === 'map' || page === 'zipcodes';
 }
 
 // ================================
@@ -161,6 +166,25 @@ function initializeNavigation() {
             link.classList.add('active');
         }
     });
+
+    // Update toggle button text and link based on current page
+    updateToggleButton();
+}
+
+function updateToggleButton() {
+    const toggleBtn = document.getElementById('page-toggle-btn');
+    const toggleText = document.getElementById('toggle-text');
+    const currentPage = getCurrentPage();
+
+    if (toggleBtn && toggleText) {
+        if (currentPage === 'map') {
+            toggleBtn.href = 'zipcodes.html';
+            toggleText.textContent = 'Zip Codes';
+        } else if (currentPage === 'zipcodes') {
+            toggleBtn.href = 'index.html';
+            toggleText.textContent = 'Locations';
+        }
+    }
 }
 
 // ================================

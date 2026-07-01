@@ -57,3 +57,6 @@ data/
 
 # Cookie files
 cookies.txt
+
+# Large shapefile data (download separately from US Census Bureau)
+MapZipCodes/
