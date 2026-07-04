@@ -1,168 +1,146 @@
 # Custom Maps Pro
 
-A web-based mapping application that allows users to create, manage, and export custom maps with location groups and markers. Built with modern web technologies, it provides an intuitive interface for organizing geographical data.
+A web-based mapping application for creating, managing, and exporting custom maps. Built as a React single-page app backed by an Express + PostgreSQL API, it supports location marker groups, ZIP code boundary outlines, and panel stock analysis overlays.
 
 ## Features
 
 - 🗺️ **Interactive Google Maps Integration** - Full-featured mapping with search and place autocomplete
-- 📍 **Location Group Management** - Organize markers into named groups with custom colors
+- 📍 **Multiple Location Mapping** - Organize numbered markers into named groups with custom colors
+- 🗾 **Zip Code Outline** - Render US ZIP code (ZCTA) boundary polygons from Census shapefile data
+- 📈 **Panel Stock Analysis** - ZIP outlines merged with centered stock-count icons, driven by session-scoped upload versions (`.xlsx` parsing coming in a later batch)
 - 📂 **Bulk Location Import** - Add multiple locations at once from text input (up to 50 addresses)
-- 📊 **Data Export** - Export location groups as CSV files or ZIP archives
+- 📊 **Data Export** - Export groups as CSV files or ZIP archives
 - 📸 **Map Screenshots** - Capture map images with formatted marker lists
-- 🎨 **Customizable Markers** - Choose colors and manage marker order with drag-and-drop
-- 📱 **Responsive Design** - Works seamlessly on desktop and mobile devices
+- 🔐 **Authentication** - Session-based login; registration opens automatically on first run
+- 📱 **Responsive Design** - Works on desktop and mobile
 
 ## Technology Stack
 
-**Frontend:**
-- Vanilla JavaScript, Tailwind CSS, HTML5
+**Frontend** (`client/`):
+- React 18 + Vite, React Router
+- Tailwind CSS (Play CDN) + legacy custom CSS
 - Google Maps JavaScript API with Places library
-- html2canvas (screenshot capture)
-- JSZip (file compression)
-- Feather Icons (UI icons)
-- AOS (animations)
+- html2canvas (screenshots), JSZip (exports), react-feather (icons)
 
-**Backend:**
+**Backend** (`server.js`):
 - Node.js, Express.js
-- Helmet (security headers)
-- Express Rate Limit (API protection)
-- CORS (cross-origin security)
-- In-memory storage
+- PostgreSQL (`pg`) for users, groups, and locations
+- `shapefile` for parsing US Census ZCTA boundary data (loaded into memory at startup)
+- Helmet, express-rate-limit, express-validator, bcrypt
 
-## Installation
+## Getting Started
 
 ### Prerequisites
-- Node.js 16+
-- npm or yarn
-- Google Maps API key with Places library enabled
 
-### Setup Instructions
+- **Node.js 18+** and npm
+- **PostgreSQL** database (local or hosted — Railway, Render, Supabase, etc.)
+- **Google Maps API key** with the Maps JavaScript API and Places library enabled
+- **Census ZCTA shapefile** at `MapZipCodes/tl_2020_us_zcta520/tl_2020_us_zcta520.shp` (2020 ZIP Code Tabulation Areas, available from [census.gov](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)) — required for ZIP boundary lookups
 
-1. **Clone and Install**:
+### 1. Install dependencies
+
+Server and client have separate package trees; install both:
+
 ```bash
-cd "Custom Map Website"
 npm install
+npm --prefix client install
 ```
 
-2. **Environment Configuration**:
+### 2. Configure environment
+
 Create a `.env` file in the project root:
+
 ```env
+# PostgreSQL connection string
+# Local dev example:  postgresql://postgres:password@localhost:5432/mapdb
+DATABASE_URL=postgresql://user:pass@host:5432/dbname
+
+# Set to "true" if your Postgres host requires SSL (Railway, Render, Supabase, etc.)
+DATABASE_SSL=false
+
 GOOGLE_MAPS_API_KEY=your-google-maps-api-key
-NODE_ENV=development
+
+# Optional
 PORT=3000
+NODE_ENV=development
 ```
 
-3. **Start the Server**:
+Database tables are created automatically on first startup.
+
+### 3. Run in development
+
 ```bash
-npm start      # Standard node server
-# or
-npm run dev    # Development mode with nodemon auto-reload
+npm run dev
 ```
 
-4. **Access Application**:
-- Main app: `http://localhost:3000`
-- About page: `http://localhost:3000/about.html`
+This runs both processes concurrently:
+- **API** — nodemon serving Express on `http://localhost:3000`
+- **Web** — Vite dev server on `http://localhost:5173` with hot reload, proxying `/api` to port 3000
 
-## API Endpoints
+Open **http://localhost:5173** for development.
 
-### Security
-- **Rate Limiting**: 100 requests per 15 minutes per IP
-- **Authentication**: No authentication (suitable for single-user or demo use)
-- **API Key Protection**: Google Maps API key served with referrer validation
+### 4. Run in production
 
-### Location Groups
+```bash
+npm run build   # builds the React app to client/dist
+npm start       # Express serves the API and client/dist on port 3000
+```
 
-- `GET /api/config` - Get Google Maps API configuration
-- `GET /api/location-groups` - Get all location groups
-- `POST /api/location-groups` - Create new location group
-- `PUT /api/location-groups/:id` - Update location group (name, locations)
-- `DELETE /api/location-groups/:id` - Delete location group
+Open **http://localhost:3000**.
 
-### Locations within Groups
+### 5. First login
 
-- `POST /api/location-groups/:id/locations` - Add location to group
-- `PUT /api/location-groups/:groupId/locations/reorder` - Reorder locations (drag-and-drop)
-- `DELETE /api/location-groups/:groupId/locations/:locationId` - Remove location from group
+On first run (no users in the database), the login page switches to **Create your account** mode. Register a username and password, then sign in normally on subsequent visits. Registration is closed once a user exists.
 
-## Usage
+> Note: parsing the ZIP shapefile takes a few seconds at startup — wait for the `✅ Loaded ... ZIP codes` log line before using ZIP lookups.
 
-### Creating and Managing Location Groups
+## Application Pages
 
-1. **Create a Location Group**: Click the "+" button in the sidebar and enter a name
-2. **Select a Group**: Choose from the dropdown to load and manage markers
-3. **Rename/Delete Groups**: Use the group management options in the sidebar
+All pages are reachable from the hamburger menu (top-left); the top-right icon toggles the right-side panel on map pages.
 
-### Adding Locations
+| Route | Page | Description |
+|---|---|---|
+| `/` | Multiple Location Mapping | Numbered markers organized into groups |
+| `/zipcodes` | Zip Code Outline | ZIP boundary polygons organized into groups |
+| `/panel-stock-analysis` | Panel Stock Analysis | ZIP outlines + centered stock-count icons from session upload versions |
+| `/login` | Login | Sign in / first-run registration |
 
-**Single Location:**
-- Use the search box to find an address
-- Select the desired marker color
-- The location will be added to the currently selected group
+Screenshot and Export actions for the active map page live at the bottom of the hamburger menu.
 
-**Bulk Upload:**
-1. Click the "Bulk Upload" button in the sidebar
-2. Enter addresses (one per line, up to 50)
-3. Select or create a target group
-4. Click "Geocode and Add" to process all addresses
-5. View success/failure report when complete
+## API Overview
 
-### Managing Markers
+All `/api` routes (except auth) require a logged-in session. Rate limited to 100 requests per 15 minutes per IP.
 
-- **Reorder**: Drag and drop locations in the sidebar list
-- **Change Colors**: Select a different color and update individual markers
-- **Delete**: Click the trash icon next to any location
+- `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` · `GET /api/auth/has-users`
+- `GET /api/config` - Google Maps API configuration
+- `POST /api/zipcodes/lookup` - ZIP boundary + center lookup (5-digit ZIP)
+- `GET|POST|PUT|DELETE /api/{locations|zipcodes}/groups[/:id]` - group CRUD
+- `POST|PUT|DELETE /api/{locations|zipcodes}/groups/:id/locations[...]` - locations within a group, incl. reorder
+- `GET|POST|DELETE /api/uploads[/:name]` - server file uploads (CSV/TXT/XLS/XLSX, 10 MB each; no UI currently — Panel Stock uploads are session-scoped in the browser)
 
-### Exporting Data
-
-**Export as CSV:**
-- Click the "Export" button in the navigation
-- Select one or more groups to export
-- Downloads a ZIP file with CSV files for each group
-
-**Screenshot Capture:**
-- Click the "Screenshot" button in the navigation
-- Map is captured with a formatted marker list
-- Downloads as a PNG image
-
-## Architecture
-
-The project follows a **multi-page architecture** with separated concerns:
+## Project Structure
 
 ```
 Custom Map Website/
-├── index.html              # Main map page
-├── about.html              # Additional pages
-├── server.js               # Express backend server
-├── script.js               # Map-specific JavaScript
-├── assets/
-│   ├── css/
-│   │   ├── shared.css      # Cross-page styles
-│   │   └── map.css         # Map-specific styles
-│   └── js/
-│       └── shared.js       # Cross-page utilities
-└── node_modules/           # Dependencies
+├── server.js                  # Express API + static serving of client/dist
+├── MapZipCodes/               # Census ZCTA shapefile data (not in repo)
+├── uploads/                   # Server-side uploaded files
+└── client/                    # React SPA (Vite)
+    └── src/
+        ├── pages/             # MapPage (locations/zipcodes), PanelStockAnalysisPage, LoginPage
+        ├── components/        # NavBar, NavMenu, Sidebar, modals, panels
+        ├── hooks/             # useMapEngine (groups pages), usePanelStockMap
+        ├── context/           # Auth, Shell (nav handlers/sidebar), Popups
+        ├── api/               # fetch wrappers for the Express API
+        ├── lib/               # markerIcons, screenshot, csvExport, panelStock*, googleMapsLoader
+        └── styles/            # shared.css + map.css (legacy CSS contract)
 ```
-
-### Key Design Principles
-- **Separation of Concerns**: Map-specific code only runs on map pages
-- **Shared Resources**: Common styles and utilities are reusable
-- **Security First**: Input validation, rate limiting, and secure headers
-- **Responsive Design**: Mobile-first approach with progressive enhancements
 
 ## Browser Compatibility
 
 - **Supported**: Chrome 80+, Firefox 75+, Safari 13+, Edge 80+
 - **Mobile**: iOS Safari 13+, Chrome Mobile 80+
-- **Not Supported**: IE 11 (uses modern JavaScript)
-
-## Future Enhancements
-
-- Database integration (MongoDB, PostgreSQL) for persistent storage
-- User authentication and authorization
-- Custom marker icons and clustering for large datasets
-- Sharing location groups with other users
-- Real-time collaboration features
-- Advanced filtering and search within groups
+- **Not Supported**: IE 11
 
 ---
 

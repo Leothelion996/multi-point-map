@@ -4,7 +4,9 @@
       "Bash(curl:*)",
       "Bash(taskkill:*)",
       "Bash(npm start)",
-      "Bash(node -e:*)"
+      "Bash(node -e:*)",
+      "PowerShell(psql --version 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\PostgreSQL\\\\18\\\\bin\\\\psql.exe\" -U postgres -c \"CREATE DATABASE custommaps_dev;\" 2>&1)"
     ],
     "deny": [],
     "ask": []

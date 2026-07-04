@@ -11,10 +11,10 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 const shapefile = require('shapefile');
 const crypto = require('crypto');
+const multer = require('multer');
 
-// Import database and middleware
+// Import database service
 const DatabaseService = require('./db/database');
-const DeviceIdMiddleware = require('./middleware/deviceId');
 
 // ZIP code data cache (loaded on startup)
 let zipcodeData = null;
@@ -66,7 +66,7 @@ const PORT = process.env.PORT || 3000;
 const corsOptions = {
     origin: process.env.NODE_ENV === 'production'
         ? ['https://yourdomain.com'] // Replace with your actual domain
-        : ['http://localhost:3000', 'http://127.0.0.1:3000'],
+        : ['http://localhost:3000', 'http://127.0.0.1:3000', 'http://localhost:5173', 'http://127.0.0.1:5173'],
     credentials: true,
     optionsSuccessStatus: 200
 };
@@ -85,7 +85,7 @@ app.use(cookieParser());
 // Security: Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per windowMs
+    max: process.env.NODE_ENV === 'production' ? 100 : 2000, // higher limit in dev: reload cycles + bulk ZIP lookups exceed 100/15min
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false
@@ -107,7 +107,9 @@ const handleValidationErrors = (req, res, next) => {
     next();
 };
 
-app.use(express.static(path.join(__dirname)));
+// Static files are served exclusively from the React build (client/dist,
+// registered in defineRoutes). The old express.static on the repo root is
+// gone — it exposed server.js, db/, and .env-adjacent files publicly.
 
 // In-memory session store: sessionId -> { userId, username }
 const sessions = new Map();
@@ -131,10 +133,12 @@ function requireAuth(req, res, next) {
     const sessionId = req.cookies['sessionId'];
     const session = getSession(sessionId);
     if (!session) {
-        if (req.path.startsWith('/api/')) {
+        // originalUrl, not path: when mounted via app.use('/api/x', requireAuth)
+        // req.path is stripped to '/' and API calls would get a 302 instead of 401
+        if (req.originalUrl.startsWith('/api/')) {
             return res.status(401).json({ error: 'Not authenticated' });
         }
-        return res.redirect('/login.html');
+        return res.redirect('/login');
     }
     req.deviceId = session.userId;
     req.username = session.username;
@@ -173,6 +177,9 @@ function defineRoutes() {
             }
             const { username, password } = req.body;
             const user = await db.createUser(username, password);
+            // Groups are keyed by device_id with an FK to devices; auth users
+            // reuse their user id as device id, so the devices row must exist
+            await db.registerDevice(user.id);
             const sessionId = createSession(user.id, user.username);
             res.cookie('sessionId', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000 });
             res.json({ username: user.username });
@@ -190,6 +197,9 @@ function defineRoutes() {
             const { username, password } = req.body;
             const user = await db.verifyUser(username, password);
             if (!user) return res.status(401).json({ error: 'Invalid username or password' });
+            // Upsert the devices row (see register) — also backfills users
+            // created before this fix
+            await db.registerDevice(user.id);
             const sessionId = createSession(user.id, user.username);
             res.cookie('sessionId', sessionId, { httpOnly: true, sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000 });
             res.json({ username: user.username });
@@ -215,11 +225,6 @@ function defineRoutes() {
         const hasUsers = await db.hasUsers();
         res.json({ hasUsers });
     });
-
-    // Protect map pages
-    app.get('/', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-    app.get('/index.html', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-    app.get('/zipcodes.html', requireAuth, (req, res) => res.sendFile(path.join(__dirname, 'zipcodes.html')));
 
     // Apply auth to all data API routes
     app.use('/api/config', requireAuth);
@@ -518,39 +523,8 @@ app.post('/api/:groupType(locations|zipcodes)/groups/:id/locations', [
     }
 });
 
-app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locationId', [
-    param('groupId').isUUID().withMessage('Invalid group ID'),
-    param('locationId').isUUID().withMessage('Invalid location ID'),
-    body('color')
-        .optional()
-        .matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)
-        .withMessage('Color must be a valid hex color'),
-    handleValidationErrors
-], async (req, res) => {
-    try {
-        const { groupId, locationId, groupType } = req.params;
-        const { color } = req.body;
-        const deviceId = req.deviceId;
-
-        if (!deviceId) {
-            return res.status(400).json({ error: 'Device ID not found' });
-        }
-
-        const updates = {};
-        if (color !== undefined) updates.color = color;
-
-        const location = await db.updateLocation(groupId, locationId, deviceId, updates);
-        res.json(location);
-    } catch (error) {
-        console.error('Error updating location:', error);
-        if (error.message.includes('not found') || error.message.includes('access denied')) {
-            res.status(404).json({ error: 'Location or group not found' });
-        } else {
-            res.status(500).json({ error: 'Failed to update location' });
-        }
-    }
-});
-
+// NOTE: the reorder route must be registered before the :locationId route,
+// otherwise "reorder" is captured as a :locationId and fails UUID validation
 app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/reorder', [
     param('groupId').isUUID().withMessage('Invalid group ID'),
     body('locationIds')
@@ -588,6 +562,39 @@ app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/reorder',
     }
 });
 
+app.put('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locationId', [
+    param('groupId').isUUID().withMessage('Invalid group ID'),
+    param('locationId').isUUID().withMessage('Invalid location ID'),
+    body('color')
+        .optional()
+        .matches(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})$/)
+        .withMessage('Color must be a valid hex color'),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const { groupId, locationId, groupType } = req.params;
+        const { color } = req.body;
+        const deviceId = req.deviceId;
+
+        if (!deviceId) {
+            return res.status(400).json({ error: 'Device ID not found' });
+        }
+
+        const updates = {};
+        if (color !== undefined) updates.color = color;
+
+        const location = await db.updateLocation(groupId, locationId, deviceId, updates);
+        res.json(location);
+    } catch (error) {
+        console.error('Error updating location:', error);
+        if (error.message.includes('not found') || error.message.includes('access denied')) {
+            res.status(404).json({ error: 'Location or group not found' });
+        } else {
+            res.status(500).json({ error: 'Failed to update location' });
+        }
+    }
+});
+
 app.delete('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locationId', [
     param('groupId').isUUID().withMessage('Invalid group ID'),
     param('locationId').isUUID().withMessage('Invalid location ID'),
@@ -612,6 +619,129 @@ app.delete('/api/:groupType(locations|zipcodes)/groups/:groupId/locations/:locat
         }
     }
 });
+
+// ================================
+// File uploads (spreadsheets/data files)
+// ================================
+
+const uploadsDir = path.join(__dirname, 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
+
+const UPLOAD_ALLOWED_EXTENSIONS = ['.csv', '.txt', '.xls', '.xlsx'];
+const UPLOAD_ALLOWED_MIMETYPES = [
+    'text/csv',
+    'text/plain',
+    'application/csv',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    // Windows browsers and CLI clients often report CSV/XLSX as a generic
+    // binary stream; the extension allowlist is the authoritative check
+    'application/octet-stream'
+];
+
+const upload = multer({
+    storage: multer.diskStorage({
+        destination: uploadsDir,
+        filename: (req, file, cb) => {
+            const safeName = path.basename(file.originalname).replace(/[^\w.\-]/g, '_');
+            cb(null, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${safeName}`);
+        }
+    }),
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
+    fileFilter: (req, file, cb) => {
+        // Extension check in addition to MIME type: browsers report CSV/TXT
+        // MIME types inconsistently across platforms
+        const ext = path.extname(file.originalname).toLowerCase();
+        const ok = UPLOAD_ALLOWED_EXTENSIONS.includes(ext) && UPLOAD_ALLOWED_MIMETYPES.includes(file.mimetype);
+        if (ok) {
+            cb(null, true);
+        } else {
+            cb(new Error(`Unsupported file type: ${file.originalname}. Allowed: CSV, TXT, XLS, XLSX.`));
+        }
+    }
+});
+
+app.use('/api/uploads', requireAuth);
+
+app.post('/api/uploads', upload.array('files', 10), (req, res) => {
+    if (!req.files || req.files.length === 0) {
+        return res.status(400).json({ error: 'No files uploaded' });
+    }
+    res.status(201).json({
+        files: req.files.map(file => ({
+            name: file.filename,
+            originalName: file.originalname,
+            size: file.size,
+            mimeType: file.mimetype
+        }))
+    });
+});
+
+app.get('/api/uploads', async (req, res) => {
+    try {
+        const names = await fs.promises.readdir(uploadsDir);
+        const files = await Promise.all(names.map(async (name) => {
+            const stats = await fs.promises.stat(path.join(uploadsDir, name));
+            return { name, size: stats.size, uploadedAt: stats.mtime };
+        }));
+        files.sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
+        res.json(files);
+    } catch (error) {
+        console.error('Error listing uploads:', error);
+        res.status(500).json({ error: 'Failed to list uploads' });
+    }
+});
+
+app.get('/api/uploads/:name', (req, res) => {
+    // path.basename guards against path traversal in the stored name
+    const filePath = path.join(uploadsDir, path.basename(req.params.name));
+    if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: 'File not found' });
+    }
+    res.download(filePath);
+});
+
+app.delete('/api/uploads/:name', async (req, res) => {
+    try {
+        const filePath = path.join(uploadsDir, path.basename(req.params.name));
+        await fs.promises.unlink(filePath);
+        res.status(204).send();
+    } catch (error) {
+        if (error.code === 'ENOENT') {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        console.error('Error deleting upload:', error);
+        res.status(500).json({ error: 'Failed to delete file' });
+    }
+});
+
+// Multer errors (size limit, rejected type) -> 400 JSON instead of a 500 page
+app.use('/api/uploads', (err, req, res, next) => {
+    if (err) {
+        const message = err.code === 'LIMIT_FILE_SIZE'
+            ? 'File too large. Maximum size is 10 MB.'
+            : err.message;
+        return res.status(400).json({ error: message });
+    }
+    next();
+});
+
+// ================================
+// React SPA (client/dist) + fallback for client-side routes
+// ================================
+
+// Gated on the build existing so the same code path works in dev (where the
+// Vite dev server is used instead) and production.
+const clientDist = path.join(__dirname, 'client', 'dist');
+if (fs.existsSync(path.join(clientDist, 'index.html'))) {
+    app.use(express.static(clientDist));
+    app.get(/^\/(?!api\/).*/, (req, res) => {
+        res.sendFile(path.join(clientDist, 'index.html'));
+    });
+    console.log('Serving React client from client/dist');
+} else {
+    console.log('client/dist not found - run "npm run build" to serve the React client');
+}
 }
 
 
