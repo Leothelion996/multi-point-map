@@ -1,27 +1,58 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus } from 'react-feather';
+import { Plus, Trash2 } from 'react-feather';
 import { usePanelStockMap } from '../hooks/usePanelStockMap.js';
 import { useShell } from '../context/ShellContext.jsx';
 import { usePopups } from '../context/PopupContext.jsx';
 import NewPanelStockUploadModal from '../components/modals/NewPanelStockUploadModal.jsx';
-import { readPanelStockUploads } from '../lib/panelStockStorage.js';
+import { fetchPanelStockUploads, deletePanelStockUpload } from '../api/panelStock.js';
 import { takeMapScreenshot } from '../lib/screenshot.js';
-import { downloadBlob } from '../lib/csvExport.js';
 
 // Panel Stock Analysis: ZIP polygon outlines (like the Zip Codes page) merged
-// with a centered stock-count icon per ZIP. Data comes from sessionStorage
-// upload versions, not the server groups API — see usePanelStockMap.
+// with a centered stock-count icon per ZIP for one selected specialty at a
+// time. Uploads are saved to Postgres via the panel-stock API (see
+// api/panelStock.js) so they persist across sessions/logins.
 export default function PanelStockAnalysisPage() {
   const { showPopup } = usePopups();
   const { sidebarOpen, setNavHandlers } = useShell();
-  const [uploads, setUploads] = useState(() => readPanelStockUploads());
-  const [selectedUploadId, setSelectedUploadId] = useState(() => readPanelStockUploads()[0]?.id ?? '');
+  const [uploads, setUploads] = useState([]);
+  const [selectedUploadId, setSelectedUploadId] = useState('');
+  const [selectedSpecialtyId, setSelectedSpecialtyId] = useState('');
   const [hideEmpty, setHideEmpty] = useState(false);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [screenshotBusy, setScreenshotBusy] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetchPanelStockUploads()
+      .then((data) => {
+        if (cancelled) return;
+        setUploads(data);
+        if (data.length > 0) setSelectedUploadId((prev) => prev || data[0].id);
+      })
+      .catch((error) => {
+        console.error('Error fetching panel stock uploads:', error);
+        showPopup('error', 'Failed to load saved panel stock uploads.', 'Load Failed');
+      });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const activeUpload = uploads.find((u) => u.id === selectedUploadId) || null;
-  const locations = useMemo(() => activeUpload?.locations ?? [], [activeUpload]);
+
+  // Reset the specialty choice whenever the selected upload changes.
+  useEffect(() => {
+    setSelectedSpecialtyId('');
+  }, [selectedUploadId]);
+
+  const locations = useMemo(() => {
+    if (!activeUpload || !selectedSpecialtyId) return [];
+    return activeUpload.rows.map((row) => ({
+      zipCode: row.zipCode,
+      title: `ZIP ${row.zipCode}`,
+      number: row.counts[selectedSpecialtyId] ?? 0,
+      color: '#3b82f6'
+    }));
+  }, [activeUpload, selectedSpecialtyId]);
 
   const engine = usePanelStockMap({ locations, hideEmpty });
 
@@ -46,7 +77,7 @@ export default function PanelStockAnalysisPage() {
   }, []);
 
   // List items mirror what the map renders; the hide-empty filter applies to
-  // both so screenshots match the visible map.
+  // both so screenshots match the visible map. Sorted highest to lowest.
   const listItems = useMemo(
     () => locations
       .map((location) => ({
@@ -54,7 +85,8 @@ export default function PanelStockAnalysisPage() {
         number: location.number ?? 0,
         color: location.color || '#3b82f6'
       }))
-      .filter((item) => !(hideEmpty && item.number === 0)),
+      .filter((item) => !(hideEmpty && item.number === 0))
+      .sort((a, b) => b.number - a.number),
     [locations, hideEmpty]
   );
 
@@ -64,9 +96,15 @@ export default function PanelStockAnalysisPage() {
       showPopup('warning', 'Create or select a Panel Stock upload first to take a screenshot.', 'Upload Required');
       return;
     }
+    if (!selectedSpecialtyId) {
+      showPopup('warning', 'Select a specialty first to take a screenshot.', 'Specialty Required');
+      return;
+    }
     setScreenshotBusy(true);
     try {
-      await takeMapScreenshot({ groupName: activeUpload.title, items: listItems });
+      const specialty = activeUpload.specialties.find((s) => s.id === selectedSpecialtyId);
+      const specialtyName = specialty?.name || selectedSpecialtyId;
+      await takeMapScreenshot({ groupName: `${activeUpload.title} - ${specialtyName} Zip Codes Map`, items: listItems });
       showPopup('success', 'Screenshot saved successfully!', 'Screenshot Complete');
     } catch (error) {
       console.error('Screenshot error:', error);
@@ -76,35 +114,35 @@ export default function PanelStockAnalysisPage() {
     }
   }
 
-  function handleExport() {
-    if (!activeUpload || locations.length === 0) {
-      showPopup('warning', 'No panel stock data to export yet.', 'Nothing to Export');
-      return;
-    }
-    const rows = [
-      ['ZIP Code', 'Title', 'Number'],
-      ...locations.map((location) => [location.zipCode, location.title || '', String(location.number ?? 0)])
-    ];
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    downloadBlob(blob, `${activeUpload.title.replace(/[^a-z0-9]/gi, '_')}_Panel_Stock.csv`);
-  }
-
-  // Register nav-level actions (Screenshot/Export in the hamburger popover);
-  // no confirmLeave — this page has no unsaved temp concept.
+  // Register nav-level actions (Screenshot in the hamburger popover); no
+  // Export here (per spec, the feature was removed) and no confirmLeave —
+  // this page has no unsaved temp concept.
   useEffect(() => {
     setNavHandlers({
-      onScreenshot: handleScreenshot,
-      onExport: handleExport
+      onScreenshot: handleScreenshot
     });
     return () => setNavHandlers({});
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeUpload, listItems, screenshotBusy]);
+  }, [activeUpload, selectedSpecialtyId, listItems, screenshotBusy]);
 
   function handleUploadCreated(upload) {
-    setUploads(readPanelStockUploads());
+    setUploads((prev) => [upload, ...prev]);
     setSelectedUploadId(upload.id);
     setUploadModalOpen(false);
+  }
+
+  async function handleDeleteUpload() {
+    if (!activeUpload) return;
+    if (!window.confirm(`Delete the upload "${activeUpload.title}"? This cannot be undone.`)) return;
+    try {
+      await deletePanelStockUpload(activeUpload.id);
+      setUploads((prev) => prev.filter((u) => u.id !== activeUpload.id));
+      setSelectedUploadId('');
+      showPopup('success', `Upload "${activeUpload.title}" deleted.`, 'Upload Deleted');
+    } catch (error) {
+      console.error('Error deleting panel stock upload:', error);
+      showPopup('error', 'Failed to delete the upload. Please try again.', 'Delete Failed');
+    }
   }
 
   return (
@@ -136,6 +174,15 @@ export default function PanelStockAnalysisPage() {
               <option key={upload.id} value={upload.id}>{upload.title}</option>
             ))}
           </select>
+          {activeUpload && (
+            <button
+              onClick={handleDeleteUpload}
+              title="Delete this upload"
+              className="inline-flex items-center p-1.5 text-gray-400 hover:text-red-600 focus:outline-none"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
           <button
             onClick={() => setUploadModalOpen(true)}
             className="inline-flex items-center px-3 py-1.5 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
@@ -159,10 +206,22 @@ export default function PanelStockAnalysisPage() {
         id="sidebar"
         className={`sidebar ${sidebarOpen ? 'sidebar-open' : 'sidebar-closed'} bg-white w-64 border-l border-gray-200 fixed right-0 z-10 flex flex-col`}
       >
-        <div className="flex-shrink-0 p-4 border-b border-gray-200">
+        <div className="flex-shrink-0 p-4 border-b border-gray-200 space-y-2">
           <h2 className="text-lg font-medium text-gray-900">Panel Stock</h2>
           {activeUpload && (
-            <p className="text-xs text-gray-500 mt-1 truncate">{activeUpload.fileName}</p>
+            <>
+              <p className="text-xs text-gray-500 truncate">{activeUpload.fileName}</p>
+              <select
+                value={selectedSpecialtyId}
+                onChange={(e) => setSelectedSpecialtyId(e.target.value)}
+                className="w-full border border-gray-300 rounded-md text-sm px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">Select a specialty…</option>
+                {activeUpload.specialties.map((specialty) => (
+                  <option key={specialty.id} value={specialty.id}>{specialty.label}</option>
+                ))}
+              </select>
+            </>
           )}
         </div>
         <div className="flex-1 overflow-y-auto">
@@ -170,14 +229,13 @@ export default function PanelStockAnalysisPage() {
             {!activeUpload && (
               <p className="text-sm text-gray-500 italic">Create a new upload to get started.</p>
             )}
-            {activeUpload && listItems.length === 0 && (
-              <p className="text-sm text-gray-500 italic">
-                {locations.length === 0
-                  ? 'No locations in this upload yet. ZIP data will appear here once spreadsheet parsing is available.'
-                  : 'All locations are empty and hidden.'}
-              </p>
+            {activeUpload && !selectedSpecialtyId && (
+              <p className="text-sm text-gray-500 italic">Select a specialty to view panel stock counts.</p>
             )}
-            {listItems.map((item, index) => (
+            {activeUpload && selectedSpecialtyId && listItems.length === 0 && (
+              <p className="text-sm text-gray-500 italic">All locations are empty and hidden.</p>
+            )}
+            {activeUpload && selectedSpecialtyId && listItems.map((item, index) => (
               <div key={`${item.title}-${index}`} className="flex items-center p-2 bg-gray-50 rounded-md">
                 <span
                   className="flex-shrink-0 w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center mr-2"

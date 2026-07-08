@@ -3,13 +3,13 @@ import { UploadCloud, File as FileIcon, X } from 'react-feather';
 import Modal from '../Modal.jsx';
 import { usePopups } from '../../context/PopupContext.jsx';
 import { mapWorkbookToPanelStock } from '../../lib/panelStockMapper.js';
-import { addPanelStockUpload } from '../../lib/panelStockStorage.js';
+import { createPanelStockUpload } from '../../api/panelStock.js';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
-// New Upload modal for Panel Stock versions. The file is validated and
-// recorded but not parsed yet — mapWorkbookToPanelStock is a stub until the
-// real .xlsx parser lands. Versions live only in sessionStorage.
+// New Upload modal for Panel Stock versions. The .xlsx file is parsed
+// client-side (panelStockMapper.js) and the resulting JSON is saved via the
+// panel-stock API, backed by Postgres.
 export default function NewPanelStockUploadModal({ open, onClose, onCreated }) {
   const { showPopup } = usePopups();
   const inputRef = useRef(null);
@@ -17,12 +17,14 @@ export default function NewPanelStockUploadModal({ open, onClose, onCreated }) {
   const [file, setFile] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   function reset() {
     setTitle('');
     setFile(null);
     setDragOver(false);
     setError('');
+    setSubmitting(false);
     if (inputRef.current) inputRef.current.value = '';
   }
 
@@ -46,7 +48,7 @@ export default function NewPanelStockUploadModal({ open, onClose, onCreated }) {
     setFile(picked);
   }
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     if (!title.trim()) {
       setError('Upload title is required.');
@@ -56,11 +58,48 @@ export default function NewPanelStockUploadModal({ open, onClose, onCreated }) {
       setError('An .xlsx file is required.');
       return;
     }
-    const { groups, locations } = mapWorkbookToPanelStock(file);
-    const upload = addPanelStockUpload({ title: title.trim(), fileName: file.name, groups, locations });
-    showPopup('success', `Upload "${upload.title}" saved for this session.`, 'Upload Created');
-    reset();
-    onCreated(upload);
+
+    setSubmitting(true);
+    setError('');
+
+    let parsed;
+    try {
+      parsed = await mapWorkbookToPanelStock(file);
+    } catch (err) {
+      setError(err.message || 'Failed to read the spreadsheet.');
+      setSubmitting(false);
+      return;
+    }
+
+    if (parsed.blockingErrors.length > 0) {
+      setError(parsed.blockingErrors[0]);
+      setSubmitting(false);
+      return;
+    }
+
+    if (parsed.duplicateZips.length > 0) {
+      showPopup(
+        'warning',
+        `Duplicate ZIP codes were found and were not processed: ${parsed.duplicateZips.join(', ')}. Fix the spreadsheet and upload an updated file for accurate visualization.`,
+        'Duplicate ZIP Codes Found'
+      );
+    }
+
+    try {
+      const upload = await createPanelStockUpload({
+        title: title.trim(),
+        fileName: file.name,
+        specialties: parsed.specialties,
+        rows: parsed.rows,
+        duplicateZips: parsed.duplicateZips
+      });
+      showPopup('success', `Upload "${upload.title}" saved.`, 'Upload Created');
+      reset();
+      onCreated(upload);
+    } catch (err) {
+      setError(err.message || 'Failed to save the upload.');
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -125,21 +164,27 @@ export default function NewPanelStockUploadModal({ open, onClose, onCreated }) {
           )}
         </div>
 
+        <p className="text-xs text-gray-500">
+          Reminder: If Column B contains city names, delete that column before uploading. If left in place with a City/Cities header, it will be ignored automatically.
+        </p>
+
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         <div className="flex justify-end space-x-2">
           <button
             type="button"
             onClick={handleClose}
-            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none"
+            disabled={submitting}
+            className="px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
-            className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
+            disabled={submitting}
+            className="px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none disabled:opacity-50"
           >
-            Create Upload
+            {submitting ? 'Uploading…' : 'Create Upload'}
           </button>
         </div>
       </form>

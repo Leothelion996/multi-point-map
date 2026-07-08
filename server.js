@@ -230,6 +230,7 @@ function defineRoutes() {
     app.use('/api/config', requireAuth);
     app.use('/api/zipcodes', requireAuth);
     app.use('/api/locations', requireAuth);
+    app.use('/api/panel-stock', requireAuth);
 
     app.get('/api/config', (req, res) => {
         res.json({
@@ -307,6 +308,79 @@ app.post('/api/zipcodes/lookup', [
     } catch (error) {
         console.error('Error looking up ZIP code:', error);
         res.status(500).json({ error: 'Failed to lookup ZIP code' });
+    }
+});
+
+// Panel Stock Analysis uploads — parsed client-side (xlsx), stored as JSONB.
+// Device-owned like location_groups; no group_type distinction needed since
+// there's only one kind of record here.
+app.get('/api/panel-stock/uploads', async (req, res) => {
+    try {
+        const deviceId = req.deviceId;
+        if (!deviceId) {
+            return res.status(400).json({ error: 'Device ID not found' });
+        }
+        const uploads = await db.getPanelStockUploads(deviceId);
+        res.json(uploads);
+    } catch (error) {
+        console.error('Error fetching panel stock uploads:', error);
+        res.status(500).json({ error: 'Failed to fetch panel stock uploads' });
+    }
+});
+
+app.get('/api/panel-stock/uploads/:id', [
+    param('id').isUUID().withMessage('Invalid upload ID'),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const deviceId = req.deviceId;
+        const upload = await db.getPanelStockUpload(req.params.id, deviceId);
+        if (!upload) {
+            return res.status(404).json({ error: 'Panel stock upload not found' });
+        }
+        res.json(upload);
+    } catch (error) {
+        console.error('Error fetching panel stock upload:', error);
+        res.status(500).json({ error: 'Failed to fetch panel stock upload' });
+    }
+});
+
+app.post('/api/panel-stock/uploads', [
+    body('title').isString().trim().isLength({ min: 1, max: 200 }).withMessage('Title is required'),
+    body('fileName').isString().trim().isLength({ min: 1, max: 255 }).withMessage('File name is required'),
+    body('specialties').isArray().withMessage('Specialties must be an array'),
+    body('rows').isArray().withMessage('Rows must be an array'),
+    body('duplicateZips').optional().isArray(),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const deviceId = req.deviceId;
+        if (!deviceId) {
+            return res.status(400).json({ error: 'Device ID not found' });
+        }
+        const { title, fileName, specialties, rows, duplicateZips } = req.body;
+        const upload = await db.createPanelStockUpload(deviceId, { title, fileName, specialties, rows, duplicateZips });
+        res.status(201).json(upload);
+    } catch (error) {
+        console.error('Error creating panel stock upload:', error);
+        res.status(500).json({ error: 'Failed to create panel stock upload' });
+    }
+});
+
+app.delete('/api/panel-stock/uploads/:id', [
+    param('id').isUUID().withMessage('Invalid upload ID'),
+    handleValidationErrors
+], async (req, res) => {
+    try {
+        const deviceId = req.deviceId;
+        await db.deletePanelStockUpload(req.params.id, deviceId);
+        res.status(204).send();
+    } catch (error) {
+        if (error.message === 'Panel stock upload not found or access denied') {
+            return res.status(404).json({ error: error.message });
+        }
+        console.error('Error deleting panel stock upload:', error);
+        res.status(500).json({ error: 'Failed to delete panel stock upload' });
     }
 });
 
