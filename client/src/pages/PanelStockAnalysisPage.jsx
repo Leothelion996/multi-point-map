@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Trash2 } from 'react-feather';
 import { usePanelStockMap } from '../hooks/usePanelStockMap.js';
 import { useShell } from '../context/ShellContext.jsx';
@@ -18,8 +18,11 @@ export default function PanelStockAnalysisPage() {
   const [selectedUploadId, setSelectedUploadId] = useState('');
   const [selectedSpecialtyId, setSelectedSpecialtyId] = useState('');
   const [hideEmpty, setHideEmpty] = useState(false);
+  const [threshold, setThreshold] = useState(''); // raw digits string, '' = filter off
+  const [selectedZip, setSelectedZip] = useState(null);
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [screenshotBusy, setScreenshotBusy] = useState(false);
+  const listRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,17 +47,40 @@ export default function PanelStockAnalysisPage() {
     setSelectedSpecialtyId('');
   }, [selectedUploadId]);
 
+  // A new upload/specialty renders a different set of ZIPs; drop the selection.
+  useEffect(() => {
+    setSelectedZip(null);
+  }, [selectedUploadId, selectedSpecialtyId]);
+
   const locations = useMemo(() => {
     if (!activeUpload || !selectedSpecialtyId) return [];
     return activeUpload.rows.map((row) => ({
       zipCode: row.zipCode,
       title: `ZIP ${row.zipCode}`,
-      number: row.counts[selectedSpecialtyId] ?? 0,
-      color: '#3b82f6'
+      number: row.counts[selectedSpecialtyId] ?? 0
     }));
   }, [activeUpload, selectedSpecialtyId]);
 
-  const engine = usePanelStockMap({ locations, hideEmpty });
+  // '' = no threshold filter; otherwise hide ZIPs whose count is below it.
+  const minCount = threshold === '' ? null : Number(threshold);
+
+  const handleZipClick = useCallback((zipCode) => setSelectedZip(zipCode), []);
+
+  const engine = usePanelStockMap({ locations, hideEmpty, minCount, onZipClick: handleZipClick });
+
+  // Map-driven selections (polygon/marker clicks) scroll the sidebar list to
+  // the matching row; skip the scroll when the row is already fully visible.
+  useEffect(() => {
+    const container = listRef.current;
+    if (!selectedZip || !container) return;
+    const row = container.querySelector(`[data-zip="${selectedZip}"]`);
+    if (!row) return;
+    const rowRect = row.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    if (rowRect.top < containerRect.top || rowRect.bottom > containerRect.bottom) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }, [selectedZip]);
 
   // Same body-level viewport lock as MapPage (body.map-page in map.css)
   useEffect(() => {
@@ -81,13 +107,15 @@ export default function PanelStockAnalysisPage() {
   const listItems = useMemo(
     () => locations
       .map((location) => ({
+        zipCode: location.zipCode,
         title: location.title || `ZIP ${location.zipCode}`,
         number: location.number ?? 0,
-        color: location.color || '#3b82f6'
+        color: engine.resolvedColors[location.zipCode] || '#3b82f6'
       }))
-      .filter((item) => !(hideEmpty && item.number === 0))
+      .filter((item) => !(hideEmpty && item.number === 0)
+        && !(minCount !== null && item.number < minCount))
       .sort((a, b) => b.number - a.number),
-    [locations, hideEmpty]
+    [locations, hideEmpty, minCount, engine.resolvedColors]
   );
 
   async function handleScreenshot() {
@@ -211,6 +239,16 @@ export default function PanelStockAnalysisPage() {
           {activeUpload && (
             <>
               <p className="text-xs text-gray-500 truncate">{activeUpload.fileName}</p>
+              <label className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-gray-700">
+                <span>Hide Zip codes lower than:</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={threshold}
+                  onChange={(e) => setThreshold(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                  className="w-14 border border-gray-300 rounded-md text-sm px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </label>
               <select
                 value={selectedSpecialtyId}
                 onChange={(e) => setSelectedSpecialtyId(e.target.value)}
@@ -224,7 +262,7 @@ export default function PanelStockAnalysisPage() {
             </>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto">
+        <div ref={listRef} className="flex-1 overflow-y-auto">
           <div className="p-4 pb-8 space-y-2">
             {!activeUpload && (
               <p className="text-sm text-gray-500 italic">Create a new upload to get started.</p>
@@ -233,10 +271,22 @@ export default function PanelStockAnalysisPage() {
               <p className="text-sm text-gray-500 italic">Select a specialty to view panel stock counts.</p>
             )}
             {activeUpload && selectedSpecialtyId && listItems.length === 0 && (
-              <p className="text-sm text-gray-500 italic">All locations are empty and hidden.</p>
+              <p className="text-sm text-gray-500 italic">All locations are hidden by the current filters.</p>
             )}
-            {activeUpload && selectedSpecialtyId && listItems.map((item, index) => (
-              <div key={`${item.title}-${index}`} className="flex items-center p-2 bg-gray-50 rounded-md">
+            {activeUpload && selectedSpecialtyId && listItems.map((item) => (
+              <div
+                key={item.zipCode}
+                data-zip={item.zipCode}
+                onClick={() => {
+                  setSelectedZip(item.zipCode);
+                  engine.focusZip(item.zipCode);
+                }}
+                className={`flex items-center p-2 rounded-md cursor-pointer ${
+                  selectedZip === item.zipCode
+                    ? 'bg-blue-100 ring-1 ring-blue-400'
+                    : 'bg-gray-50 hover:bg-gray-100'
+                }`}
+              >
                 <span
                   className="flex-shrink-0 w-6 h-6 rounded-full text-white text-xs font-bold flex items-center justify-center mr-2"
                   style={{ backgroundColor: item.color }}
