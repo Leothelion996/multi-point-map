@@ -69,6 +69,20 @@ class DatabaseService {
             `CREATE INDEX IF NOT EXISTS idx_locations_group_id ON locations(group_id)`,
             `CREATE INDEX IF NOT EXISTS idx_locations_order ON locations(group_id, order_index)`,
             `CREATE INDEX IF NOT EXISTS idx_location_groups_type ON location_groups(device_id, group_type)`,
+            `CREATE TABLE IF NOT EXISTS panel_stock_uploads (
+                id TEXT PRIMARY KEY,
+                device_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                specialties JSONB NOT NULL,
+                rows JSONB NOT NULL,
+                duplicate_zips JSONB DEFAULT '[]'::jsonb,
+                created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+            )`,
+            `CREATE INDEX IF NOT EXISTS idx_panel_stock_uploads_device_id ON panel_stock_uploads(device_id)`,
+            `CREATE INDEX IF NOT EXISTS idx_panel_stock_uploads_created_at ON panel_stock_uploads(device_id, created_at DESC)`,
         ];
 
         for (const sql of statements) {
@@ -455,6 +469,79 @@ class DatabaseService {
             title: row.title,
             color: row.color
         };
+    }
+
+    async getPanelStockUploads(deviceId) {
+        const sql = `
+            SELECT * FROM panel_stock_uploads
+            WHERE device_id = $1
+            ORDER BY created_at DESC
+        `;
+        const result = await this.pool.query(sql, [deviceId]);
+        return result.rows.map(row => ({
+            id: row.id,
+            title: row.title,
+            fileName: row.file_name,
+            specialties: row.specialties,
+            rows: row.rows,
+            duplicateZips: row.duplicate_zips,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+        }));
+    }
+
+    async getPanelStockUpload(uploadId, deviceId) {
+        const sql = `
+            SELECT * FROM panel_stock_uploads
+            WHERE id = $1 AND device_id = $2
+        `;
+        const result = await this.pool.query(sql, [uploadId, deviceId]);
+        const row = result.rows[0];
+        if (!row) return null;
+        return {
+            id: row.id,
+            title: row.title,
+            fileName: row.file_name,
+            specialties: row.specialties,
+            rows: row.rows,
+            duplicateZips: row.duplicate_zips,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at
+        };
+    }
+
+    async createPanelStockUpload(deviceId, { title, fileName, specialties, rows, duplicateZips }) {
+        const id = uuidv4();
+        const now = new Date().toISOString();
+        await this.pool.query(
+            `INSERT INTO panel_stock_uploads
+                (id, device_id, title, file_name, specialties, rows, duplicate_zips, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
+            [
+                id, deviceId, title, fileName,
+                JSON.stringify(specialties),
+                JSON.stringify(rows),
+                JSON.stringify(duplicateZips || []),
+                now
+            ]
+        );
+        return {
+            id, title, fileName,
+            specialties, rows,
+            duplicateZips: duplicateZips || [],
+            createdAt: now, updatedAt: now
+        };
+    }
+
+    async deletePanelStockUpload(uploadId, deviceId) {
+        const result = await this.pool.query(
+            'DELETE FROM panel_stock_uploads WHERE id = $1 AND device_id = $2',
+            [uploadId, deviceId]
+        );
+        if (result.rowCount === 0) {
+            throw new Error('Panel stock upload not found or access denied');
+        }
+        return true;
     }
 
     async createUser(username, password) {

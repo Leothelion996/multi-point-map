@@ -1,0 +1,11 @@
+/* Global stylesheet for the React app.
+   shared.css and map.css are verbatim copies of the legacy assets/css files —
+   the React components keep the same ids/classes those files target. */
+@import './shared.css';
+@import './map.css';
+
+/* Popup auto-dismiss progress animation (was injected via JS in the legacy script) */
+@keyframes shrink {
+    from { width: 100%; }
+    to { width: 0%; }
+}
