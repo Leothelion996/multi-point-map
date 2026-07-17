@@ -9,7 +9,8 @@
     "dev:server": "nodemon server.js",
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
-    "colors:build": "node scripts/computeZipCaColors.js"
+    "colors:build": "node scripts/computeZipCaColors.js",
+    "zips:seed": "node scripts/seedZipBoundaries.js"
   },
   "nodemonConfig": {
     "watch": [
@@ -29,13 +30,13 @@
     "express-validator": "^7.0.1",
     "helmet": "^7.1.0",
     "multer": "^2.0.1",
-    "shapefile": "^0.6.6",
     "pg": "^8.13.0",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
-    "nodemon": "^3.0.1"
+    "nodemon": "^3.0.1",
+    "shapefile": "^0.6.6"
   },
   "keywords": [
     "maps",

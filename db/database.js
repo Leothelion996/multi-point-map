@@ -2,6 +2,17 @@ const { Pool } = require('pg');
 const { v4: uuidv4 } = require('uuid');
 const bcrypt = require('bcrypt');
 
+// Shared with scripts/seedZipBoundaries.js so the schema lives in one place.
+// geometry is pre-stringified GeoJSON TEXT: the lookup endpoints return it as
+// a string, so TEXT is a pure pass-through (JSONB would re-serialize).
+const ZIP_BOUNDARIES_DDL = `CREATE TABLE IF NOT EXISTS zip_boundaries (
+    zip_code   TEXT PRIMARY KEY,
+    center_lat DOUBLE PRECISION NOT NULL,
+    center_lng DOUBLE PRECISION NOT NULL,
+    geometry   TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+)`;
+
 class DatabaseService {
     constructor() {
         this.pool = null;
@@ -83,6 +94,7 @@ class DatabaseService {
             )`,
             `CREATE INDEX IF NOT EXISTS idx_panel_stock_uploads_device_id ON panel_stock_uploads(device_id)`,
             `CREATE INDEX IF NOT EXISTS idx_panel_stock_uploads_created_at ON panel_stock_uploads(device_id, created_at DESC)`,
+            ZIP_BOUNDARIES_DDL,
         ];
 
         for (const sql of statements) {
@@ -577,6 +589,28 @@ class DatabaseService {
         return parseInt(result.rows[0].count, 10) > 0;
     }
 
+    // ZIP boundary lookups (seeded by scripts/seedZipBoundaries.js).
+    // Batch is one indexed query, not N — the PK covers = ANY($1).
+    async getZipBoundaries(zipCodes) {
+        const result = await this.pool.query(
+            `SELECT zip_code, center_lat, center_lng, geometry
+             FROM zip_boundaries
+             WHERE zip_code = ANY($1)`,
+            [zipCodes]
+        );
+        return result.rows;
+    }
+
+    async getZipBoundary(zipCode) {
+        const rows = await this.getZipBoundaries([zipCode]);
+        return rows[0] || null;
+    }
+
+    async countZipBoundaries() {
+        const result = await this.pool.query('SELECT COUNT(*) as count FROM zip_boundaries');
+        return parseInt(result.rows[0].count, 10);
+    }
+
     async close() {
         if (this.pool) {
             await this.pool.end();
@@ -590,3 +624,4 @@ class DatabaseService {
 }
 
 module.exports = DatabaseService;
+module.exports.ZIP_BOUNDARIES_DDL = ZIP_BOUNDARIES_DDL;
