@@ -1,149 +1,156 @@
-# Custom Maps Pro
+# Custom Map Website
 
-A web-based mapping application for creating, managing, and exporting custom maps. Built as a React single-page app backed by an Express + PostgreSQL API, it supports location marker groups, ZIP code boundary outlines, and panel stock analysis overlays.
+Internal Google Maps web app for building and sharing map views.
 
-## Features
+It supports:
 
-- 🗺️ **Interactive Google Maps Integration** - Full-featured mapping with search and place autocomplete
-- 📍 **Multiple Location Mapping** - Organize numbered markers into named groups with custom colors
-- 🗾 **Zip Code Outline** - Render US ZIP code (ZCTA) boundary polygons from Census shapefile data
-- 📈 **Panel Stock Analysis** - ZIP outlines merged with centered stock-count icons, driven by session-scoped upload versions (`.xlsx` parsing coming in a later batch)
-- 📂 **Bulk Location Import** - Add multiple locations at once from text input (up to 50 addresses)
-- 📊 **Data Export** - Export groups as CSV files or ZIP archives
-- 📸 **Map Screenshots** - Capture map images with formatted marker lists
-- 🔐 **Authentication** - Session-based login; registration opens automatically on first run
-- 📱 **Responsive Design** - Works on desktop and mobile
+- Location marker groups
+- ZIP code polygon groups
+- Panel Stock Analysis from `.xlsx` uploads
+- CSV/ZIP exports and map screenshots
+- Session login with first-run account creation
 
-## Technology Stack
+## Tech Stack
 
-**Frontend** (`client/`):
-- React 18 + Vite, React Router
-- Tailwind CSS (Play CDN) + legacy custom CSS
-- Google Maps JavaScript API with Places library
-- html2canvas (screenshots), JSZip (exports), react-feather (icons)
+- Frontend: React 19, Vite, React Router, Google Maps JavaScript API, `xlsx`, `html2canvas`, `JSZip`
+- Backend: Node.js 20+, Express, PostgreSQL, cookie sessions, bcrypt, multer, Helmet, rate limiting
+- Production: Ubuntu VPS, PM2, Nginx, Certbot
+- Data: PostgreSQL stores users, groups, locations, panel stock uploads, and ZIP boundaries
 
-**Backend** (`server.js`):
-- Node.js, Express.js
-- PostgreSQL (`pg`) for users, groups, and locations
-- `shapefile` for parsing US Census ZCTA boundary data (loaded into memory at startup)
-- Helmet, express-rate-limit, express-validator, bcrypt
+## Requirements
 
-## Getting Started
+- Node.js 20+
+- npm
+- PostgreSQL
+- Google Maps API key with Maps JavaScript API and Places enabled
+- For ZIP boundary seeding only: Census ZCTA shapefile at:
 
-### Prerequisites
-
-- **Node.js 18+** and npm
-- **PostgreSQL** database (local or hosted — Railway, Render, Supabase, etc.)
-- **Google Maps API key** with the Maps JavaScript API and Places library enabled
-- **Census ZCTA shapefile** at `MapZipCodes/tl_2020_us_zcta520/tl_2020_us_zcta520.shp` (2020 ZIP Code Tabulation Areas, available from [census.gov](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html)) — required for ZIP boundary lookups
-
-### 1. Install dependencies
-
-Server and client have separate package trees; install both:
-
-```bash
-npm install
-npm --prefix client install
+```text
+MapZipCodes/tl_2020_us_zcta520/tl_2020_us_zcta520.shp
 ```
 
-### 2. Configure environment
+`MapZipCodes/` is intentionally gitignored because it is large.
 
-Create a `.env` file in the project root:
+## Environment
+
+Create `.env` in the repo root:
 
 ```env
-# PostgreSQL connection string
-# Local dev example:  postgresql://postgres:password@localhost:5432/mapdb
-DATABASE_URL=postgresql://user:pass@host:5432/dbname
-
-# Set to "true" if your Postgres host requires SSL (Railway, Render, Supabase, etc.)
+DATABASE_URL=postgresql://user:password@localhost:5432/custommaps
 DATABASE_SSL=false
-
-GOOGLE_MAPS_API_KEY=your-google-maps-api-key
-
-# Optional
-PORT=3000
+GOOGLE_MAPS_API_KEY=your_google_maps_key
 NODE_ENV=development
+PORT=3000
 ```
 
-Database tables are created automatically on first startup.
+Notes:
 
-### 3. Run in development
+- Use `DATABASE_SSL=true` only when the Postgres provider requires SSL.
+- `PORT` defaults to `3000`.
+- Do not commit `.env`.
+
+## Local Setup
+
+```bash
+npm ci
+npm --prefix client ci
+```
+
+Create a PostgreSQL database and set `DATABASE_URL`.
+
+If ZIP boundaries have not been seeded into that database and `MapZipCodes/` exists:
+
+```bash
+npm run zips:seed
+```
+
+Start local development:
 
 ```bash
 npm run dev
 ```
 
-This runs both processes concurrently:
-- **API** — nodemon serving Express on `http://localhost:3000`
-- **Web** — Vite dev server on `http://localhost:5173` with hot reload, proxying `/api` to port 3000
+Open:
 
-Open **http://localhost:5173** for development.
+```text
+http://localhost:5173
+```
 
-### 4. Run in production
+The API runs on `http://localhost:3000`. Vite proxies `/api` requests to it.
+
+## First Login
+
+When the database has no users, the login page allows account creation. After the first user exists, registration closes and users must sign in.
+
+## ZIP Boundaries
+
+ZIP boundaries now live in PostgreSQL, not in server memory.
+
+- Table: `zip_boundaries`
+- Seeder: `scripts/seedZipBoundaries.js`
+- Command: `npm run zips:seed`
+- Default range: California ZCTAs, `90001-96162`
+- Behavior: idempotent upsert
+
+The server creates the table automatically, but it does not automatically seed boundary rows. If the table is empty, ZIP lookup endpoints return `503` until seeded.
+
+To seed another numeric ZIP range:
 
 ```bash
-npm run build   # builds the React app to client/dist
-npm start       # Express serves the API and client/dist on port 3000
+node scripts/seedZipBoundaries.js --min 97001 --max 97920
 ```
 
-Open **http://localhost:3000**.
+ZIP polygon colors are loaded from `server/staticData/caZipColors.json`. Rebuild only if the source shapefile or color logic changes:
 
-### 5. First login
-
-On first run (no users in the database), the login page switches to **Create your account** mode. Register a username and password, then sign in normally on subsequent visits. Registration is closed once a user exists.
-
-> Note: parsing the ZIP shapefile takes a few seconds at startup — wait for the `✅ Loaded ... ZIP codes` log line before using ZIP lookups.
-
-## Application Pages
-
-All pages are reachable from the hamburger menu (top-left); the top-right icon toggles the right-side panel on map pages.
-
-| Route | Page | Description |
-|---|---|---|
-| `/` | Multiple Location Mapping | Numbered markers organized into groups |
-| `/zipcodes` | Zip Code Outline | ZIP boundary polygons organized into groups |
-| `/panel-stock-analysis` | Panel Stock Analysis | ZIP outlines + centered stock-count icons from session upload versions |
-| `/login` | Login | Sign in / first-run registration |
-
-Screenshot and Export actions for the active map page live at the bottom of the hamburger menu.
-
-## API Overview
-
-All `/api` routes (except auth) require a logged-in session. Rate limited to 100 requests per 15 minutes per IP.
-
-- `POST /api/auth/register` · `POST /api/auth/login` · `POST /api/auth/logout` · `GET /api/auth/me` · `GET /api/auth/has-users`
-- `GET /api/config` - Google Maps API configuration
-- `POST /api/zipcodes/lookup` - ZIP boundary + center lookup (5-digit ZIP)
-- `GET|POST|PUT|DELETE /api/{locations|zipcodes}/groups[/:id]` - group CRUD
-- `POST|PUT|DELETE /api/{locations|zipcodes}/groups/:id/locations[...]` - locations within a group, incl. reorder
-- `GET|POST|DELETE /api/uploads[/:name]` - server file uploads (CSV/TXT/XLS/XLSX, 10 MB each; no UI currently — Panel Stock uploads are session-scoped in the browser)
-
-## Project Structure
-
-```
-Custom Map Website/
-├── server.js                  # Express API + static serving of client/dist
-├── MapZipCodes/               # Census ZCTA shapefile data (not in repo)
-├── uploads/                   # Server-side uploaded files
-└── client/                    # React SPA (Vite)
-    └── src/
-        ├── pages/             # MapPage (locations/zipcodes), PanelStockAnalysisPage, LoginPage
-        ├── components/        # NavBar, NavMenu, Sidebar, modals, panels
-        ├── hooks/             # useMapEngine (groups pages), usePanelStockMap
-        ├── context/           # Auth, Shell (nav handlers/sidebar), Popups
-        ├── api/               # fetch wrappers for the Express API
-        ├── lib/               # markerIcons, screenshot, csvExport, panelStock*, googleMapsLoader
-        └── styles/            # shared.css + map.css (legacy CSS contract)
+```bash
+npm run colors:build
 ```
 
-## Browser Compatibility
+## Useful Scripts
 
-- **Supported**: Chrome 80+, Firefox 75+, Safari 13+, Edge 80+
-- **Mobile**: iOS Safari 13+, Chrome Mobile 80+
-- **Not Supported**: IE 11
+```bash
+npm run dev              # API + Vite client
+npm run dev:server       # Express with nodemon
+npm run dev:client       # Vite only
+npm run build            # Build client to client/dist
+npm start                # Run production Express server
+npm run zips:seed        # Seed ZIP boundaries into Postgres
+npm run colors:build     # Rebuild committed CA ZIP color data
+```
 
----
+## Production Summary
 
-## Disclaimer
+Current deployment shape:
 
-This website was developed with the assistance of [Claude.ai](https://claude.ai), an AI assistant by Anthropic.
+- Git branch: `main`
+- App path: `/var/www/custom-map`
+- Process manager: PM2 app named `custom-map`
+- Web server: Nginx reverse proxy to `127.0.0.1:3000`
+- HTTPS: Certbot/Nginx
+- Database: PostgreSQL
+
+Normal update on the server:
+
+```bash
+cd /var/www/custom-map
+git pull origin main
+npm ci
+npm --prefix client ci
+npm run build
+pm2 restart custom-map --update-env
+pm2 save
+pm2 logs custom-map --lines 80
+```
+
+Run `npm run zips:seed` only if Postgres was reset, `zip_boundaries` is empty, or ZIP boundary data changed.
+
+Detailed server notes are in `DEPLOYMENT_RUNBOOK.md`.
+
+## Troubleshooting
+
+- ZIP lookups return `503`: run `npm run zips:seed`, then restart the app.
+- Google Maps is blank: check `GOOGLE_MAPS_API_KEY`, enabled APIs, and allowed referrers.
+- Build warns about Node engine: use Node.js 20+.
+- App is down: check `pm2 status`, `pm2 logs custom-map --lines 80`, and `systemctl status nginx --no-pager`.
+- Database errors: check `DATABASE_URL`, `DATABASE_SSL`, and that PostgreSQL is running.
+- Login registration is gone: expected after the first user account exists.
