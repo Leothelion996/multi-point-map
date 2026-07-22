@@ -5,6 +5,7 @@ import LoginPage from './pages/LoginPage.jsx';
 import LocationsPage from './pages/LocationsPage.jsx';
 import ZipCodesPage from './pages/ZipCodesPage.jsx';
 import PanelStockAnalysisPage from './pages/PanelStockAnalysisPage.jsx';
+import DoctorLocationsPage from './pages/DoctorLocationsPage.jsx';
 import NotFoundPage from './pages/NotFoundPage.jsx';
 
 export default function App() {
@@ -15,6 +16,8 @@ export default function App() {
         <Route path="/" element={<LocationsPage />} />
         <Route path="/zipcodes" element={<ZipCodesPage />} />
         <Route path="/panel-stock-analysis" element={<PanelStockAnalysisPage />} />
+        {/* Any authenticated role can view; mutations are gated in-page via RequireRole */}
+        <Route path="/doctor-locations" element={<DoctorLocationsPage />} />
       </Route>
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

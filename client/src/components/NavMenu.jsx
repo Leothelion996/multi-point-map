@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Download, Grid, Map as MapIcon, MapPin, Menu } from 'react-feather';
+import { Camera, Download, Grid, Map as MapIcon, MapPin, Menu, Users } from 'react-feather';
 import { useShell } from '../context/ShellContext.jsx';
 
 const ROUTES = [
   { to: '/zipcodes', label: 'Zip Code Outline', Icon: MapIcon },
   { to: '/', label: 'Multiple Location Mapping', Icon: MapPin },
-  { to: '/panel-stock-analysis', label: 'Panel Stock Analysis', Icon: Grid }
+  { to: '/panel-stock-analysis', label: 'Panel Stock Analysis', Icon: Grid },
+  { to: '/doctor-locations', label: 'Doctor DWC Locations', Icon: Users }
 ];
 
 // Left hamburger popover: route entries plus the active page's Screenshot /

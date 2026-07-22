@@ -15,6 +15,9 @@ const multer = require('multer');
 // Import database service
 const DatabaseService = require('./db/database');
 
+// DWC doctor location tracking routes (see server/dwc/)
+const { registerDwcRoutes } = require('./server/dwc/routes');
+
 // ZIP boundary data lives in the zip_boundaries Postgres table (seeded by
 // scripts/seedZipBoundaries.js — CA only). This flag caches whether the table
 // has rows so an unseeded deploy returns 503 instead of 404ing every ZIP.
@@ -126,6 +129,27 @@ function requireAuth(req, res, next) {
     next();
 }
 
+// Role middleware — role is sourced from the DB on each request, NOT the
+// in-memory sessions map. Sessions live up to 365 days; caching the role
+// there would mean an Admin demoting someone mid-session has no effect until
+// that session naturally expires — a real correctness gap for a permissions
+// feature. One indexed PK lookup per request is negligible at this app's
+// scale and buys correct just-in-time enforcement.
+function requireRole(...allowedRoles) {
+    return async function (req, res, next) {
+        try {
+            const role = await db.getUserRole(req.deviceId);
+            if (!role || !allowedRoles.includes(role)) {
+                return res.status(403).json({ error: 'Insufficient permissions' });
+            }
+            req.role = role;
+            next();
+        } catch (err) {
+            res.status(500).json({ error: 'Failed to verify permissions' });
+        }
+    };
+}
+
 // Initialize database and device ID middleware
 let db;
 
@@ -157,7 +181,11 @@ function defineRoutes() {
                 return res.status(403).json({ error: 'Registration is closed' });
             }
             const { username, password } = req.body;
-            const user = await db.createUser(username, password);
+            // First-user bootstrap: registration is only open while no users
+            // exist, so this account is the sole one at this point and must
+            // be able to administer everything — explicitly 'admin', not the
+            // column's 'staff' default.
+            const user = await db.createUser(username, password, 'admin');
             // Groups are keyed by device_id with an FK to devices; auth users
             // reuse their user id as device id, so the devices row must exist
             await db.registerDevice(user.id);
@@ -196,10 +224,17 @@ function defineRoutes() {
         res.json({ ok: true });
     });
 
-    app.get('/api/auth/me', (req, res) => {
+    app.get('/api/auth/me', async (req, res) => {
         const session = getSession(req.cookies['sessionId']);
         if (!session) return res.status(401).json({ error: 'Not authenticated' });
-        res.json({ username: session.username });
+        try {
+            // Role comes from the DB, not the session, so demotions apply
+            // immediately (same reasoning as requireRole).
+            const role = await db.getUserRole(session.userId);
+            res.json({ username: session.username, role });
+        } catch (err) {
+            res.status(500).json({ error: 'Failed to fetch user info' });
+        }
     });
 
     app.get('/api/auth/has-users', async (req, res) => {
@@ -212,6 +247,9 @@ function defineRoutes() {
     app.use('/api/zipcodes', requireAuth);
     app.use('/api/locations', requireAuth);
     app.use('/api/panel-stock', requireAuth);
+
+    // DWC doctor location tracking (doctors, locations, sync runs, users)
+    registerDwcRoutes(app, db, requireAuth, requireRole);
 
     app.get('/api/config', (req, res) => {
         res.json({

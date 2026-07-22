@@ -10,7 +10,8 @@
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
     "colors:build": "node scripts/computeZipCaColors.js",
-    "zips:seed": "node scripts/seedZipBoundaries.js"
+    "zips:seed": "node scripts/seedZipBoundaries.js",
+    "test": "vitest run server/dwc"
   },
   "nodemonConfig": {
     "watch": [
@@ -22,6 +23,7 @@
   "dependencies": {
     "bcrypt": "^6.0.0",
     "body-parser": "^1.20.2",
+    "cheerio": "^1.2.0",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
@@ -36,7 +38,8 @@
   "devDependencies": {
     "concurrently": "^9.1.0",
     "nodemon": "^3.0.1",
-    "shapefile": "^0.6.6"
+    "shapefile": "^0.6.6",
+    "vitest": "^4.1.10"
   },
   "keywords": [
     "maps",

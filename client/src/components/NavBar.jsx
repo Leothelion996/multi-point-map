@@ -13,7 +13,8 @@ export default function NavBar() {
   const onMapPage =
     pathname === '/' ||
     pathname.startsWith('/zipcodes') ||
-    pathname.startsWith('/panel-stock-analysis');
+    pathname.startsWith('/panel-stock-analysis') ||
+    pathname.startsWith('/doctor-locations');
 
   async function handleLogout() {
     await logout();
