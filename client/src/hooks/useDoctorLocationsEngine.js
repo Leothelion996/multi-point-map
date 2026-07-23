@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as doctorsApi from '../api/doctors.js';
+import * as dwcSyncApi from '../api/dwcSync.js';
 import { loadGoogleMaps } from '../lib/googleMapsLoader.js';
 import { createNumberedMarkerIcon } from '../lib/markerIcons.js';
 import { geocodeAddress } from '../lib/geocode.js';
 import { usePopups } from '../context/PopupContext.jsx';
+
+const TERMINAL_RUN_STATUSES = ['completed', 'completed_with_errors', 'failed'];
 
 // Parallel hook to useMapEngine for the /doctor-locations page. Same
 // architecture: Google Maps objects (map, markers, info window) live in refs
@@ -77,13 +80,17 @@ export function useDoctorLocationsEngine() {
     const [mapError, setMapError] = useState(false);
     const [doctors, setDoctors] = useState([]);
     const [includeInactiveDoctors, setIncludeInactiveDoctorsState] = useState(false);
+    const [includeInactiveLocations, setIncludeInactiveLocationsState] = useState(false);
     const [currentDoctorId, setCurrentDoctorId] = useState(null);
     const [locations, setLocations] = useState([]);
     const [locationsLoading, setLocationsLoading] = useState(false);
     const [selectedLocationId, setSelectedLocationId] = useState(null);
-    const [zoomDisplay, setZoomDisplay] = useState('12.0');
     // Background geocoding pass progress: {active, total, done, failed}
     const [geocodePass, setGeocodePass] = useState({ active: false, total: 0, done: 0, failed: 0 });
+    // DWC Sync popover state (Section 3 relocation): trigger + 2s polling + results
+    const [syncRun, setSyncRun] = useState(null);
+    const [syncResults, setSyncResults] = useState(null);
+    const [syncBusy, setSyncBusy] = useState(false);
 
     // --- refs (imperative map world + values read from map callbacks) ---
     const mapDivRef = useRef(null);
@@ -94,7 +101,8 @@ export function useDoctorLocationsEngine() {
     const currentDoctorIdRef = useRef(null);
     const locationsRef = useRef([]);
     const includeInactiveDoctorsRef = useRef(false);
-    const fractionalZoomRef = useRef(12);
+    const includeInactiveLocationsRef = useRef(false);
+    const syncPollTimerRef = useRef(null);
     // Effect guard for the geocode pass: bumping the token cancels any loop
     // still running, so the pass runs once per doctor-selection-with-pending-
     // rows instead of stacking up on re-selections or re-renders.
@@ -151,7 +159,7 @@ export function useDoctorLocationsEngine() {
         const currentZoom = mapRef.current ? mapRef.current.getZoom() : 12;
         markersRef.current.forEach((marker, index) => {
             const isSelected = marker === selectedMarkerRef.current;
-            marker.setIcon(createNumberedMarkerIcon(index + 1, marker.originalColor, isSelected, currentZoom));
+            marker.setIcon(createNumberedMarkerIcon(index + 1, marker.originalColor, isSelected, currentZoom, marker.isInactive));
         });
     }
 
@@ -179,12 +187,14 @@ export function useDoctorLocationsEngine() {
         const container = document.createElement('div');
         container.className = 'p-1';
         const badgeColor = classificationColor(location.classification);
+        const isInactive = location.status === 'inactive';
         container.innerHTML = `
             <div class="text-sm font-medium text-gray-900 mb-1">${escapeHtml(location.dwcDisplayName || locationAddress(location))}</div>
             <div class="text-xs text-gray-600 mb-1">${escapeHtml(locationAddress(location))}</div>
             ${location.phone ? `<div class="text-xs text-gray-600 mb-1">${escapeHtml(location.phone)}</div>` : ''}
             ${location.specialty ? `<div class="text-xs text-gray-600 mb-1">${escapeHtml(location.specialty)}</div>` : ''}
             <div class="text-xs font-medium" style="color: ${badgeColor}">${escapeHtml(classificationLabel(location.classification))}${location.classificationOverride ? ' (manual override)' : ''}</div>
+            ${isInactive ? `<div class="text-xs font-medium text-gray-500 mt-1">Delisted${location.deactivatedAt ? ` on ${escapeHtml(new Date(location.deactivatedAt).toLocaleDateString())}` : ''}</div>` : ''}
         `;
         return container;
     }
@@ -199,14 +209,16 @@ export function useDoctorLocationsEngine() {
     function createMarkerObj(location) {
         const google = window.google;
         const color = classificationColor(location.classification);
+        const isInactive = location.status === 'inactive';
         const marker = new google.maps.Marker({
             position: { lat: location.lat, lng: location.lng },
             map: mapRef.current,
-            title: locationAddress(location),
-            icon: createNumberedMarkerIcon(markersRef.current.length + 1, color, false, mapRef.current?.getZoom() ?? 12)
+            title: locationAddress(location) + (isInactive ? ' (delisted)' : ''),
+            icon: createNumberedMarkerIcon(markersRef.current.length + 1, color, false, mapRef.current?.getZoom() ?? 12, isInactive)
         });
         marker.locationId = location.id;
         marker.originalColor = color;
+        marker.isInactive = isInactive;
 
         markersRef.current.push(marker);
 
@@ -346,7 +358,9 @@ export function useDoctorLocationsEngine() {
     async function loadDoctorLocations(doctorId, { runGeocode = true } = {}) {
         setLocationsLoading(true);
         try {
-            const fetched = await doctorsApi.fetchDoctorLocations(doctorId);
+            const fetched = await doctorsApi.fetchDoctorLocations(doctorId, {
+                includeInactive: includeInactiveLocationsRef.current
+            });
             const rows = Array.isArray(fetched) ? fetched : (fetched?.locations || []);
             if (currentDoctorIdRef.current !== doctorId) return;
 
@@ -390,12 +404,109 @@ export function useDoctorLocationsEngine() {
     }
 
     // Reload the current doctor's locations without triggering geocoding
-    // (used after classification-override clears) or with it (after syncs).
+    // or with it (after syncs).
     function reloadLocations({ runGeocode = true } = {}) {
         const doctorId = currentDoctorIdRef.current;
         if (!doctorId) return;
         geocodeTokenRef.current++;
         loadDoctorLocations(doctorId, { runGeocode });
+    }
+
+    function setIncludeInactiveLocations(value) {
+        includeInactiveLocationsRef.current = value;
+        setIncludeInactiveLocationsState(value);
+        reloadLocations({ runGeocode: false });
+    }
+
+    // ================================
+    // DWC Sync (Admin/Staff): trigger + 2s polling + results summary
+    // Lives here (rather than in a sidebar component) so it survives
+    // regardless of which component renders its controls (top-left menu
+    // popover) — polling keeps running even while the popover is closed.
+    // ================================
+
+    function stopSyncPolling() {
+        if (syncPollTimerRef.current) {
+            clearInterval(syncPollTimerRef.current);
+            syncPollTimerRef.current = null;
+        }
+    }
+
+    async function loadSyncResults(runId) {
+        try {
+            const fetched = await dwcSyncApi.fetchSyncRunResults(runId);
+            setSyncResults(Array.isArray(fetched) ? fetched : (fetched?.results || []));
+        } catch (error) {
+            console.error('Error fetching sync run results:', error);
+        }
+    }
+
+    function startSyncPolling(runId) {
+        stopSyncPolling();
+        setSyncResults(null);
+        syncPollTimerRef.current = setInterval(async () => {
+            try {
+                const latest = await dwcSyncApi.fetchSyncRun(runId);
+                setSyncRun(latest);
+                if (TERMINAL_RUN_STATUSES.includes(latest.status)) {
+                    stopSyncPolling();
+                    loadSyncResults(runId);
+                    // Sync may have added/removed locations: refresh what's on screen
+                    refreshDoctors();
+                    reloadLocations();
+                }
+            } catch (error) {
+                console.error('Error polling sync run:', error);
+            }
+        }, 2000);
+    }
+
+    async function runSyncNow() {
+        if (syncBusy || syncRun?.status === 'running') return;
+        setSyncBusy(true);
+        try {
+            const created = await dwcSyncApi.triggerSync();
+            setSyncRun(created);
+            startSyncPolling(created.id);
+            popup('info', 'Sync started. Progress will update below.', 'Sync Running');
+        } catch (error) {
+            if (error.status === 409) {
+                popup('warning', 'A sync is already running. Showing its progress.', 'Sync In Progress');
+                // Pick up the in-flight run and poll it
+                try {
+                    const fetched = await dwcSyncApi.fetchSyncRuns({ limit: 5 });
+                    const list = Array.isArray(fetched) ? fetched : (fetched?.runs || []);
+                    const running = list.find((r) => r.status === 'running');
+                    if (running) {
+                        setSyncRun(running);
+                        startSyncPolling(running.id);
+                    }
+                } catch (fetchError) {
+                    console.error('Error fetching running sync:', fetchError);
+                }
+            } else {
+                console.error('Error triggering sync:', error);
+                popup('error', `Failed to start sync: ${error.message}`, 'Sync Failed');
+            }
+        } finally {
+            setSyncBusy(false);
+        }
+    }
+
+    async function retrySyncFailed() {
+        if (!syncRun || syncBusy) return;
+        setSyncBusy(true);
+        try {
+            const created = await dwcSyncApi.retryFailed(syncRun.id);
+            setSyncRun(created);
+            startSyncPolling(created.id);
+            popup('info', 'Retrying failed doctors...', 'Retry Started');
+        } catch (error) {
+            console.error('Error retrying failed doctors:', error);
+            popup('error', `Failed to start retry: ${error.message}`, 'Retry Failed');
+        } finally {
+            setSyncBusy(false);
+        }
     }
 
     // ================================
@@ -428,41 +539,6 @@ export function useDoctorLocationsEngine() {
     }
 
     // ================================
-    // Classification overrides (Admin/Staff; server enforces)
-    // ================================
-
-    async function setClassification(locationId, classification) {
-        try {
-            await doctorsApi.patchLocationClassification(locationId, classification);
-            applyLocationUpdate(locationId, { classification, classificationOverride: true });
-
-            const marker = markersRef.current.find((m) => m.locationId === locationId);
-            if (marker) {
-                marker.originalColor = classificationColor(classification);
-                updateAllMarkerIcons();
-            }
-            infoWindowRef.current?.close();
-            popup('success', `Classification set to ${classificationLabel(classification)}`, 'Classification Updated');
-        } catch (error) {
-            console.error('Error updating classification:', error);
-            popup('error', 'Failed to update classification. Please try again.', 'Update Failed');
-        }
-    }
-
-    async function clearClassificationOverride(locationId) {
-        try {
-            await doctorsApi.clearLocationClassificationOverride(locationId);
-            // Clearing only removes the override flag; the classification value
-            // itself is re-derived by the next sync, not immediately.
-            applyLocationUpdate(locationId, { classificationOverride: false });
-            popup('success', 'Manual override cleared. The next sync will auto-classify this location.', 'Override Cleared');
-        } catch (error) {
-            console.error('Error clearing classification override:', error);
-            popup('error', 'Failed to clear override. Please try again.', 'Update Failed');
-        }
-    }
-
-    // ================================
     // List interactions / view controls
     // ================================
 
@@ -472,12 +548,6 @@ export function useDoctorLocationsEngine() {
         selectMarkerObj(marker);
         mapRef.current.setCenter(marker.getPosition());
         mapRef.current.setZoom(15);
-    }
-
-    function fineZoom(delta) {
-        fractionalZoomRef.current = Math.min(20, Math.max(1, fractionalZoomRef.current + delta));
-        mapRef.current?.setZoom(fractionalZoomRef.current);
-        setZoomDisplay(fractionalZoomRef.current.toFixed(1));
     }
 
     function triggerResize() {
@@ -514,8 +584,6 @@ export function useDoctorLocationsEngine() {
                     gestureHandling: 'greedy'
                 });
                 mapRef.current = map;
-                fractionalZoomRef.current = map.getZoom();
-                setZoomDisplay(map.getZoom().toFixed(1));
 
                 infoWindowRef.current = new gmaps.InfoWindow({
                     content: document.createElement('div'),
@@ -529,15 +597,6 @@ export function useDoctorLocationsEngine() {
                 const debouncedBoundsUpdate = debounce(updateAllMarkerIcons, 150);
                 map.addListener('bounds_changed', debouncedBoundsUpdate);
 
-                map.addListener('zoom_changed', () => {
-                    const z = map.getZoom();
-                    // Sync only when zoom changed from outside (scroll wheel, native controls)
-                    if (Math.abs(z - fractionalZoomRef.current) > 0.5) {
-                        fractionalZoomRef.current = z;
-                    }
-                    setZoomDisplay(fractionalZoomRef.current.toFixed(1));
-                });
-
                 setMapReady(true);
                 refreshDoctors();
             })
@@ -550,6 +609,27 @@ export function useDoctorLocationsEngine() {
             cancelled = true;
             geocodeTokenRef.current++; // cancel any in-flight geocode pass
             clearMapObjects();
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Show the most recent sync run on mount (and resume polling if one is
+    // running) — independent of the Google Maps bootstrap above.
+    useEffect(() => {
+        let cancelled = false;
+        dwcSyncApi.fetchSyncRuns({ limit: 1 })
+            .then((fetched) => {
+                if (cancelled) return;
+                const list = Array.isArray(fetched) ? fetched : (fetched?.runs || []);
+                if (list.length > 0) {
+                    setSyncRun(list[0]);
+                    if (list[0].status === 'running') startSyncPolling(list[0].id);
+                }
+            })
+            .catch((error) => console.error('Error fetching sync runs:', error));
+        return () => {
+            cancelled = true;
+            stopSyncPolling();
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -581,7 +661,6 @@ export function useDoctorLocationsEngine() {
         // map state
         mapReady,
         mapError,
-        zoomDisplay,
         // doctors
         doctors,
         currentDoctor,
@@ -602,15 +681,18 @@ export function useDoctorLocationsEngine() {
         selectedLocationId,
         selectLocationFromList,
         reloadLocations,
+        includeInactiveLocations,
+        setIncludeInactiveLocations,
         // geocoding pass
         geocodePass,
         retryGeocoding,
-        // classification
-        setClassification,
-        clearClassificationOverride,
+        // DWC sync (Section 3: rendered from a top-left menu popover)
+        syncRun,
+        syncResults,
+        syncBusy,
+        runSyncNow,
+        retrySyncFailed,
         // view controls
-        fineZoomIn: () => fineZoom(0.1),
-        fineZoomOut: () => fineZoom(-0.1),
         fitMapToMarkers,
         triggerResize
     };

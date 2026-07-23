@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Camera, Download, Grid, Map as MapIcon, MapPin, Menu, Users } from 'react-feather';
+import { Camera, Download, Grid, Map as MapIcon, MapPin, Menu, RefreshCw, Users } from 'react-feather';
 import { useShell } from '../context/ShellContext.jsx';
 
 const ROUTES = [
@@ -48,7 +48,7 @@ export default function NavMenu() {
     action();
   }
 
-  const hasActions = navHandlers.onScreenshot || navHandlers.onExport;
+  const hasActions = navHandlers.onScreenshot || navHandlers.onExport || navHandlers.onOpenSync;
 
   return (
     <div ref={containerRef} className="relative">
@@ -94,6 +94,15 @@ export default function NavMenu() {
                 >
                   <Download className="mr-3 h-4 w-4 text-green-600" />
                   <span>Export</span>
+                </button>
+              )}
+              {navHandlers.onOpenSync && (
+                <button
+                  onClick={() => runAction(navHandlers.onOpenSync)}
+                  className="w-full flex items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  <RefreshCw className="mr-3 h-4 w-4 text-purple-600" />
+                  <span>DWC Sync</span>
                 </button>
               )}
             </>
